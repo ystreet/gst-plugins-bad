@@ -26,13 +26,6 @@
 #include <gst/gst.h>
 #include <gst/video/video.h>
 
-#ifdef HAVE_STDLIB_H
-#include <stdlib.h>
-#endif
-#ifdef HAVE_STRING_H
-#include <string.h>
-#endif
-
 #include "gstglmixer.h"
 
 #if GST_GL_HAVE_PLATFORM_EGL
