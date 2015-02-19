@@ -189,6 +189,24 @@ _find_local_gl_context (GstGLBaseFilter * filter)
 }
 
 static gboolean
+_ensure_gl_setup (GstGLBaseFilter * filter)
+{
+  GstGLBaseFilterClass *filter_class = GST_GL_BASE_FILTER_GET_CLASS (filter);
+
+  if (!gst_gl_ensure_element_data (filter, &filter->display,
+          &filter->priv->other_context)) {
+    return FALSE;
+  }
+
+  gst_gl_display_filter_gl_api (filter->display,
+      filter_class->supported_gl_api);
+
+  _find_local_gl_context (filter);
+
+  return TRUE;
+}
+
+static gboolean
 gst_gl_base_filter_query (GstBaseTransform * trans, GstPadDirection direction,
     GstQuery * query)
 {
@@ -196,6 +214,17 @@ gst_gl_base_filter_query (GstBaseTransform * trans, GstPadDirection direction,
   GstGLBaseFilterClass *filter_class = GST_GL_BASE_FILTER_GET_CLASS (filter);
 
   switch (GST_QUERY_TYPE (query)) {
+    case GST_QUERY_ALLOCATION:
+    {
+      if (direction == GST_PAD_SINK
+          && gst_base_transform_is_passthrough (trans)) {
+        if (!_ensure_gl_setup (filter))
+          return FALSE;
+
+        return gst_pad_peer_query (GST_BASE_TRANSFORM_SRC_PAD (trans), query);
+      }
+      break;
+    }
     case GST_QUERY_CONTEXT:
     {
       const gchar *context_type;
@@ -321,20 +350,12 @@ gst_gl_base_filter_decide_allocation (GstBaseTransform * trans,
     GstQuery * query)
 {
   GstGLBaseFilter *filter = GST_GL_BASE_FILTER (trans);
-  GstGLBaseFilterClass *filter_class = GST_GL_BASE_FILTER_GET_CLASS (filter);
   GError *error = NULL;
   GstGLContext *other_context = NULL;
   guint idx;
 
-  if (!gst_gl_ensure_element_data (filter, &filter->display,
-          &filter->priv->other_context)) {
+  if (!_ensure_gl_setup (filter))
     return FALSE;
-  }
-
-  gst_gl_display_filter_gl_api (filter->display,
-      filter_class->supported_gl_api);
-
-  _find_local_gl_context (filter);
 
   if (!filter->context && gst_query_find_allocation_meta (query,
           GST_VIDEO_GL_TEXTURE_UPLOAD_META_API_TYPE, &idx)) {
