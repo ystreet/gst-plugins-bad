@@ -31,6 +31,7 @@ GST_DEBUG_CATEGORY_STATIC (GST_CAT_DEFAULT);
 enum
 {
   PROP_0,
+  PROP_FILTER,
 };
 
 enum
@@ -45,10 +46,13 @@ static guint gst_gl_filter_bin_signals[LAST_SIGNAL] = { 0 };
 #define gst_gl_filter_bin_parent_class parent_class
 G_DEFINE_TYPE_WITH_CODE (GstGLFilterBin, gst_gl_filter_bin,
     GST_TYPE_BIN, GST_DEBUG_CATEGORY_INIT (gst_gl_filter_bin_debug,
-        "glfilterbin", 0, "glfilterbin element");
-    );
+        "glfilterbin", 0, "glfilterbin element"););
 
 static void gst_gl_filter_bin_finalize (GObject * object);
+static void gst_gl_filter_bin_get_property (GObject * object, guint prop_id,
+    GValue * value, GParamSpec * pspec);
+static void gst_gl_filter_bin_set_property (GObject * object, guint prop_id,
+    const GValue * value, GParamSpec * pspec);
 
 static GstStateChangeReturn gst_gl_filter_bin_change_state (GstElement *
     element, GstStateChange transition);
@@ -74,12 +78,22 @@ gst_gl_filter_bin_class_init (GstGLFilterBinClass * klass)
 
   element_class->change_state = gst_gl_filter_bin_change_state;
 
+  gobject_class->set_property = gst_gl_filter_bin_set_property;
+  gobject_class->get_property = gst_gl_filter_bin_get_property;
   gobject_class->finalize = gst_gl_filter_bin_finalize;
 
   gst_element_class_add_pad_template (element_class,
       gst_static_pad_template_get (&_src_pad_template));
   gst_element_class_add_pad_template (element_class,
       gst_static_pad_template_get (&_sink_pad_template));
+
+  g_object_class_install_property (gobject_class, PROP_FILTER,
+      g_param_spec_object ("filter",
+          "GL filter element",
+          "The GL filter chain to use",
+          GST_TYPE_ELEMENT,
+          GST_PARAM_MUTABLE_READY | G_PARAM_READWRITE |
+          G_PARAM_STATIC_STRINGS));
 
   /**
    * GstFilterBin::create-element:
@@ -186,6 +200,45 @@ gst_gl_filter_bin_finish_init (GstGLFilterBin * self)
 }
 
 static void
+gst_gl_filter_bin_get_property (GObject * object, guint prop_id,
+    GValue * value, GParamSpec * pspec)
+{
+  GstGLFilterBin *self = GST_GL_FILTER_BIN (object);
+
+  switch (prop_id) {
+    case PROP_FILTER:
+      g_value_set_object (value, self->filter);
+      break;
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+      break;
+  }
+}
+
+static void
+gst_gl_filter_bin_set_property (GObject * object, guint prop_id,
+    const GValue * value, GParamSpec * pspec)
+{
+  GstGLFilterBin *self = GST_GL_FILTER_BIN (object);
+
+  switch (prop_id) {
+    case PROP_FILTER:
+    {
+      GstElement *filter = g_value_get_object (value);
+      if (self->filter)
+        gst_bin_remove (GST_BIN (self), self->filter);
+      self->filter = filter;
+      if (filter)
+        _connect_filter_element (self);
+      break;
+    }
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+      break;
+  }
+}
+
+static void
 gst_gl_filter_bin_finalize (GObject * object)
 {
   G_OBJECT_CLASS (parent_class)->finalize (object);
@@ -202,7 +255,7 @@ gst_gl_filter_bin_change_state (GstElement * element, GstStateChange transition)
     case GST_STATE_CHANGE_NULL_TO_READY:
       if (!self->filter) {
         if (klass->create_element)
-          self->filter = klass->create_element;
+          self->filter = klass->create_element ();
 
         if (!self->filter)
           g_signal_emit (element,
