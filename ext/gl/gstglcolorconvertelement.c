@@ -453,7 +453,8 @@ GST_DEBUG_CATEGORY_STATIC (gst_gl_color_convert_element_debug);
 G_DEFINE_TYPE_WITH_CODE (GstGLColorConvertElement, gst_gl_color_convert_element,
     GST_TYPE_GL_BASE_FILTER,
     GST_DEBUG_CATEGORY_INIT (gst_gl_color_convert_element_debug,
-        "glconvertelement", 0, "convert"););
+        "glconvertelement", 0, "convert");
+    );
 
 #define GST_GL_COLOR_CONVERT_ELEMENT_GET_PRIVATE(obj) (G_TYPE_INSTANCE_GET_PRIVATE ((obj), \
     GST_TYPE_GL_COLOR_CONVERT_ELEMENT, GstGLColorConvertElementPrivate))
@@ -512,6 +513,8 @@ gst_gl_color_convert_element_class_init (GstGLColorConvertElementClass * klass)
       _gst_gl_color_convert_element_prepare_output_buffer;
   bt_class->transform = _gst_gl_color_convert_element_transform;
 
+  bt_class->passthrough_on_same_caps = TRUE;
+
   gst_element_class_add_pad_template (element_class,
       gst_static_pad_template_get
       (&gst_gl_color_convert_element_src_pad_template));
@@ -535,6 +538,9 @@ gst_gl_color_convert_element_init (GstGLColorConvertElement * convert)
   gst_video_info_set_format (&convert->in_info, GST_VIDEO_FORMAT_ENCODED, 0, 0);
   gst_video_info_set_format (&convert->out_info, GST_VIDEO_FORMAT_ENCODED, 0,
       0);
+
+  gst_base_transform_set_prefer_passthrough (GST_BASE_TRANSFORM (convert),
+      TRUE);
 }
 
 static void
@@ -764,6 +770,7 @@ _gst_gl_color_convert_element_prepare_output_buffer (GstBaseTransform * bt,
   GstGLColorConvertElement *convert = GST_GL_COLOR_CONVERT_ELEMENT (bt);
 
   if (gst_video_info_is_equal (&convert->in_info, &convert->out_info)) {
+    convert->outbuf = inbuf;
     *outbuf = inbuf;
     return GST_FLOW_OK;
   }

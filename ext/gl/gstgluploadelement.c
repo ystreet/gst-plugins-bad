@@ -977,6 +977,8 @@ gst_gl_upload_element_class_init (GstGLUploadElementClass * klass)
   bt_class->prepare_output_buffer = gst_gl_upload_element_prepare_output_buffer;
   bt_class->transform = gst_gl_upload_element_transform;
 
+  bt_class->passthrough_on_same_caps = TRUE;
+
   gst_element_class_add_pad_template (element_class,
       gst_static_pad_template_get (&gst_gl_upload_element_src_pad_template));
   gst_element_class_add_pad_template (element_class,
@@ -993,6 +995,8 @@ static void
 gst_gl_upload_element_init (GstGLUploadElement * upload)
 {
   upload->priv = GST_GL_UPLOAD_ELEMENT_GET_PRIVATE (upload);
+
+  gst_base_transform_set_prefer_passthrough (GST_BASE_TRANSFORM (upload), TRUE);
 }
 
 static void
