@@ -769,7 +769,7 @@ _gst_gl_color_convert_element_prepare_output_buffer (GstBaseTransform * bt,
 {
   GstGLColorConvertElement *convert = GST_GL_COLOR_CONVERT_ELEMENT (bt);
 
-  if (gst_video_info_is_equal (&convert->in_info, &convert->out_info)) {
+  if (gst_base_transform_is_passthrough (bt)) {
     convert->outbuf = inbuf;
     *outbuf = inbuf;
     return GST_FLOW_OK;

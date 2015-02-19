@@ -927,8 +927,7 @@ static const UploadMethod *upload_methods[] = { &_gl_memory_upload,
 G_DEFINE_TYPE_WITH_CODE (GstGLUploadElement, gst_gl_upload_element,
     GST_TYPE_GL_BASE_FILTER,
     GST_DEBUG_CATEGORY_INIT (gst_gl_upload_element_debug, "gluploadelement", 0,
-        "glupload");
-    );
+        "glupload"););
 #define GST_GL_UPLOAD_ELEMENT_GET_PRIVATE(obj) (G_TYPE_INSTANCE_GET_PRIVATE ((obj), \
     GST_TYPE_GL_UPLOAD_ELEMENT, GstGLUploadElementPrivate))
 static void gst_gl_upload_element_finalize (GObject * object);
@@ -1184,8 +1183,10 @@ gst_gl_upload_element_prepare_output_buffer (GstBaseTransform * bt,
   GstGLUploadElement *upload = GST_GL_UPLOAD_ELEMENT (bt);
   GstGLUploadElementReturn ret = GST_GL_UPLOAD_ELEMENT_ERROR;
 
-  g_return_val_if_fail (upload->priv->outbuf == NULL, GST_FLOW_ERROR);
-
+  if (gst_base_transform_is_passthrough (bt)) {
+    *outbuf = buffer;
+    return GST_FLOW_OK;
+  }
 #define NEXT_METHOD \
 do { \
   if (!_upload_find_method (upload)) { \
@@ -1204,8 +1205,7 @@ restart:
     NEXT_METHOD;
 
   ret =
-      upload->priv->method->perform (upload->priv->method_impl, buffer,
-      &upload->priv->outbuf);
+      upload->priv->method->perform (upload->priv->method_impl, buffer, outbuf);
   if (ret == GST_GL_UPLOAD_ELEMENT_UNSHARED_GL_CONTEXT) {
     upload->priv->method->free (upload->priv->method_impl);
     upload->priv->method = &_raw_data_upload;
@@ -1214,14 +1214,11 @@ restart:
   } else if (ret == GST_GL_UPLOAD_ELEMENT_DONE) {
     /* we are done */
   } else {
-    upload->priv->method->release (upload->priv->method_impl,
-        upload->priv->outbuf);
-    gst_buffer_replace (&upload->priv->outbuf, NULL);
+    upload->priv->method->release (upload->priv->method_impl, *outbuf);
+    gst_buffer_replace (outbuf, NULL);
     upload->priv->method->free (upload->priv->method_impl);
     NEXT_METHOD;
   }
-
-  *outbuf = upload->priv->outbuf;
 
   return ret == GST_GL_UPLOAD_ELEMENT_DONE ? GST_FLOW_OK : GST_FLOW_ERROR;
 
@@ -1232,11 +1229,5 @@ static GstFlowReturn
 gst_gl_upload_element_transform (GstBaseTransform * bt, GstBuffer * buffer,
     GstBuffer * outbuf)
 {
-  GstGLUploadElement *upload = GST_GL_UPLOAD_ELEMENT (bt);
-
-  g_return_val_if_fail (buffer == upload->priv->outbuf, GST_FLOW_ERROR);
-
-  upload->priv->outbuf = NULL;
-
   return GST_FLOW_OK;
 }

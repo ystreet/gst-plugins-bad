@@ -38,8 +38,6 @@ static void gst_gl_download_element_finalize (GObject * object);
 
 static gboolean gst_gl_download_element_get_unit_size (GstBaseTransform * trans,
     GstCaps * caps, gsize * size);
-static gboolean gst_gl_download_element_query (GstBaseTransform * bt,
-    GstPadDirection direction, GstQuery * query);
 static GstCaps *gst_gl_download_element_transform_caps (GstBaseTransform * bt,
     GstPadDirection direction, GstCaps * caps, GstCaps * filter);
 static gboolean gst_gl_download_element_set_caps (GstBaseTransform * bt,
@@ -68,7 +66,6 @@ gst_gl_download_element_class_init (GstGLDownloadElementClass * klass)
   GstBaseTransformClass *bt_class = GST_BASE_TRANSFORM_CLASS (klass);
   GstElementClass *element_class = GST_ELEMENT_CLASS (klass);
 
-  bt_class->query = gst_gl_download_element_query;
   bt_class->transform_caps = gst_gl_download_element_transform_caps;
   bt_class->set_caps = gst_gl_download_element_set_caps;
   bt_class->get_unit_size = gst_gl_download_element_get_unit_size;
@@ -101,25 +98,6 @@ static void
 gst_gl_download_element_finalize (GObject * object)
 {
   G_OBJECT_CLASS (gst_gl_download_element_parent_class)->finalize (object);
-}
-
-static gboolean
-gst_gl_download_element_query (GstBaseTransform * trans,
-    GstPadDirection direction, GstQuery * query)
-{
-  switch (GST_QUERY_TYPE (query)) {
-    case GST_QUERY_ALLOCATION:
-    {
-      if (direction == GST_PAD_SINK)
-        return gst_pad_peer_query (GST_BASE_TRANSFORM_SRC_PAD (trans), query);
-      break;
-    }
-    default:
-      break;
-  }
-
-  return GST_BASE_TRANSFORM_CLASS (parent_class)->query (trans, direction,
-      query);
 }
 
 static gboolean
@@ -169,7 +147,7 @@ gst_gl_download_element_transform_caps (GstBaseTransform * bt,
     result = tmp;
   }
 
-  GST_ERROR_OBJECT (bt, "returning caps %" GST_PTR_FORMAT, result);
+  GST_DEBUG_OBJECT (bt, "returning caps %" GST_PTR_FORMAT, result);
 
   return result;
 }
@@ -192,7 +170,7 @@ static GstFlowReturn
 gst_gl_download_element_prepare_output_buffer (GstBaseTransform * bt,
     GstBuffer * inbuf, GstBuffer ** outbuf)
 {
-  *outbuf = gst_buffer_ref (inbuf);
+  *outbuf = inbuf;
 
   return GST_FLOW_OK;
 }
