@@ -260,7 +260,9 @@ gst_gl_base_filter_query (GstBaseTransform * trans, GstPadDirection direction,
       GST_ERROR_OBJECT (filter, "context query of type %s %i", context_type,
           ret);
 
-      return ret;
+      if (ret)
+        return ret;
+      break;
     }
     default:
       break;
