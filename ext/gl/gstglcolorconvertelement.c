@@ -791,6 +791,9 @@ _gst_gl_color_convert_element_prepare_output_buffer (GstBaseTransform * bt,
 
   *outbuf = convert->outbuf;
 
+  gst_buffer_copy_into (*outbuf, inbuf,
+      GST_BUFFER_COPY_FLAGS | GST_BUFFER_COPY_TIMESTAMPS, 0, -1);
+
   return GST_FLOW_OK;
 }
 

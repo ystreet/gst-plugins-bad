@@ -1220,6 +1220,10 @@ restart:
     NEXT_METHOD;
   }
 
+  if (*outbuf)
+    gst_buffer_copy_into (*outbuf, buffer,
+        GST_BUFFER_COPY_FLAGS | GST_BUFFER_COPY_TIMESTAMPS, 0, -1);
+
   return ret == GST_GL_UPLOAD_ELEMENT_DONE ? GST_FLOW_OK : GST_FLOW_ERROR;
 
 #undef NEXT_METHOD
