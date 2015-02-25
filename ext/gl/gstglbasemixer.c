@@ -170,7 +170,7 @@ gst_gl_base_mixer_sink_query (GstAggregator * agg, GstAggregatorPad * bpad,
         gst_query_unref (decide_query);
 
       GST_DEBUG_OBJECT (mix, "ALLOCATION ret %d, %" GST_PTR_FORMAT, ret, query);
-      break;
+      return ret;
     }
     case GST_QUERY_CONTEXT:
     {
@@ -204,14 +204,16 @@ gst_gl_base_mixer_sink_query (GstAggregator * agg, GstAggregatorPad * bpad,
       }
       GST_ERROR_OBJECT (mix, "context query of type %s %i", context_type, ret);
 
+      if (ret)
+        return ret;
+
       break;
     }
     default:
-      ret = GST_AGGREGATOR_CLASS (parent_class)->sink_query (agg, bpad, query);
       break;
   }
 
-  return ret;
+  return GST_AGGREGATOR_CLASS (parent_class)->sink_query (agg, bpad, query);;
 }
 
 static void
@@ -421,14 +423,16 @@ gst_gl_base_mixer_src_query (GstAggregator * agg, GstQuery * query)
       }
       GST_ERROR_OBJECT (mix, "context query of type %s %i", context_type, res);
 
+      if (res)
+        return res;
+
       break;
     }
     default:
-      res = GST_AGGREGATOR_CLASS (parent_class)->src_query (agg, query);
       break;
   }
 
-  return res;
+  return GST_AGGREGATOR_CLASS (parent_class)->src_query (agg, query);
 }
 
 static gboolean
