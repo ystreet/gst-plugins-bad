@@ -51,19 +51,12 @@ typedef struct _GstGLMixerPadClass GstGLMixerPadClass;
 /* all information needed for one video stream */
 struct _GstGLMixerPad
 {
-  GstGLBaseMixerPad parent;                /* subclass the pad */
-
-  /* <private> */
-  GstGLUpload *upload;
-  GstGLColorConvert *convert;
-  GstBuffer *gl_buffer;
+  GstGLBaseMixerPad parent;
 };
 
 struct _GstGLMixerPadClass
 {
   GstGLBaseMixerPadClass parent_class;
-
-  GstBuffer * (*upload_buffer) (GstGLMixer * mix, GstGLMixerFrameData * frame, GstBuffer * buffer);
 };
 
 GType gst_gl_mixer_pad_get_type (void);
@@ -92,14 +85,10 @@ struct _GstGLMixer
 {
   GstGLBaseMixer vaggregator;
 
-  /* FIXME remove */
   GstGLContext      *context;
 
   GPtrArray *array_buffers;
   GPtrArray *frames;
-
-  GLuint out_tex_id;
-  GstGLDownload *download;
 
   GLuint fbo;
   GLuint depthbuffer;
