@@ -772,10 +772,16 @@ gst_gl_color_convert_transform_caps (GstGLContext * convert,
   gst_caps_unref (caps);
   gst_caps_unref (templ);
 
+  GST_ERROR ("intersect %" GST_PTR_FORMAT " with template %" GST_PTR_FORMAT " result %"
+      GST_PTR_FORMAT, caps, templ, result);
+
   if (filter) {
     GstCaps *tmp;
 
     tmp = gst_caps_intersect_full (filter, result, GST_CAPS_INTERSECT_FIRST);
+
+    GST_ERROR ("intersect %" GST_PTR_FORMAT " with filter %" GST_PTR_FORMAT
+        " result %" GST_PTR_FORMAT, result, filter, tmp);
     gst_caps_unref (result);
     result = tmp;
   }
