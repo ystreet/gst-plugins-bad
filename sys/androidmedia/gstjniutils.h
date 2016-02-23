@@ -29,6 +29,8 @@
 #include <glib.h>
 #include <gst/gst.h>
 
+G_BEGIN_DECLS
+
 jclass    gst_amc_jni_get_class              (JNIEnv * env,
                                              GError ** err,
                                              const gchar * name);
@@ -189,5 +191,7 @@ void     gst_amc_buffer_free (GstAmcBuffer * buffer);
 
 gboolean gst_amc_jni_get_buffer_array (JNIEnv * env, GError ** err, jobject array, GstAmcBuffer ** buffers, gsize * n_buffers);
 void gst_amc_jni_free_buffer_array (JNIEnv * env, GstAmcBuffer * buffers, gsize n_buffers);
+
+G_END_DECLS
 
 #endif

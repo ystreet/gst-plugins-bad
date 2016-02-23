@@ -54,6 +54,7 @@
 
 #include "gstamcvideodec.h"
 #include "gstamc-constants.h"
+#include "gstamcsurfacetexture_nativelistener.h"
 
 GST_DEBUG_CATEGORY_STATIC (gst_amc_video_dec_debug_category);
 #define GST_CAT_DEFAULT gst_amc_video_dec_debug_category
@@ -250,6 +251,7 @@ static gboolean gst_amc_video_dec_src_query (GstVideoDecoder * bdec,
 
 static GstFlowReturn gst_amc_video_dec_drain (GstAmcVideoDec * self);
 static gboolean gst_amc_video_dec_check_codec_config (GstAmcVideoDec * self);
+static void _native_on_frame_available (gpointer user_data);
 static void
 gst_amc_video_dec_on_frame_available (JNIEnv * env, jobject thiz,
     long long context, jobject surfaceTexture);
@@ -2015,6 +2017,9 @@ gst_amc_video_dec_set_format (GstVideoDecoder * decoder,
       goto done;
     }
 
+    gst_amc_surface_texture_set_native_listener (surface_texture,
+        (GstAmcFrameAvailableNotify) _native_on_frame_available, self, NULL);
+
     self->surface = gst_amc_surface_new (surface_texture, &err);
     jsurface = self->surface->jobject;
 
@@ -2551,6 +2556,22 @@ context_error:
     return FALSE;
   }
 #endif
+}
+
+static void
+_native_on_frame_available (gpointer user_data)
+{
+  GstAmcVideoDec *self = GST_AMC_VIDEO_DEC (user_data);
+
+  /* apparently we can be called after the decoder has been closed */
+  if (!self)
+    return;
+
+  g_mutex_lock (&self->gl_lock);
+  self->gl_ready_frame_count++;
+  GST_LOG_OBJECT (self, "frame %u available", self->gl_ready_frame_count);
+  g_cond_broadcast (&self->gl_cond);
+  g_mutex_unlock (&self->gl_lock);
 }
 
 static void

@@ -47,6 +47,7 @@ struct _GstAmcSurfaceTexture
   /* instance members */
   gint texture_id;
   jobject jobject;
+  gpointer listener;
 };
 
 struct _GstAmcSurfaceTextureClass

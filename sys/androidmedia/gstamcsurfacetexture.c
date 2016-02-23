@@ -27,6 +27,7 @@
 
 #include "gstjniutils.h"
 #include "gstamcsurfacetexture.h"
+#include "gstamcsurfacetexture_nativelistener.h"
 
 G_DEFINE_TYPE (GstAmcSurfaceTexture, gst_amc_surface_texture, G_TYPE_OBJECT);
 
@@ -153,6 +154,11 @@ gst_amc_surface_texture_dispose (GObject * object)
   if (self->jobject) {
     gst_amc_jni_object_unref (env, self->jobject);
   }
+
+  if (self->listener)
+    gst_amc_native_listener_unref (self->listener);
+  self->listener = NULL;
+
   G_OBJECT_CLASS (parent_class)->dispose (object);
 }
 

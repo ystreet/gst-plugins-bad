@@ -1711,7 +1711,16 @@ HAVE_ANDROID_MEDIA="no"
 AG_GST_CHECK_FEATURE(ANDROID_MEDIA, [Android Media], androidmedia, [
   case "$host" in
     *android*)
-      AC_CHECK_HEADER(jni.h, HAVE_ANDROID_MEDIA="yes", HAVE_ANDROID_MEDIA="no")
+      AC_CHECK_HEADER(jni.h, [
+          PKG_CHECK_MODULES(GNUSTL, gnustl, [
+            HAVE_ANDROID_MEDIA="yes"
+          ], [
+            AC_MSG_NOTICE([Could not find Standard C++ library])
+            HAVE_ANDROID_MEDIA="no"
+          ])
+        ], [
+          HAVE_ANDROID_MEDIA="no"
+        ])
       ;;
     *)
       HAVE_ANDROID_MEDIA="no"

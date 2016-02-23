@@ -11,6 +11,7 @@ libgstandroidmedia_la_SOURCES = \
 	gst-android-graphics-imageformat.c \
 	gst-android-graphics-surfacetexture.c \
 	gst-android-hardware-camera.c \
+	gstamcsurfacetexture_nativelistener.cpp \
 	gstjniutils.c
 
 noinst_HEADERS = \
@@ -25,6 +26,7 @@ noinst_HEADERS = \
 	gst-android-graphics-imageformat.h \
 	gst-android-graphics-surfacetexture.h \
 	gst-android-hardware-camera.h \
+	gstamcsurfacetexture_nativelistener.h \
 	gstjniutils.h
 
 libgstandroidmedia_la_CFLAGS = \
@@ -34,7 +36,20 @@ libgstandroidmedia_la_CFLAGS = \
 	$(GST_BASE_CFLAGS) \
 	$(GST_CFLAGS) \
 	$(ORC_CFLAGS) \
+	-I$(top_srcdir)/sys/androidmedia/L/include \
 	-DGST_USE_UNSTABLE_API
+
+libgstandroidmedia_la_CXXFLAGS = \
+	-I$(top_srcdir)/gst-libs \
+	-I$(top_builddir)/gst-libs \
+	$(GST_PLUGINS_BASE_CFLAGS) \
+	$(GST_BASE_CFLAGS) \
+	$(GST_CXXFLAGS) \
+	$(ORC_CFLAGS) \
+	$(GNUSTL_CFLAGS) \
+	-I$(top_srcdir)/sys/androidmedia/L/include \
+	-DGST_USE_UNSTABLE_API \
+	-std=c++11
 
 libgstandroidmedia_la_LIBADD = \
 	$(top_builddir)/gst-libs/gst/interfaces/libgstphotography-$(GST_API_VERSION).la \
@@ -45,7 +60,13 @@ libgstandroidmedia_la_LIBADD = \
 	-lgstvideo-@GST_API_VERSION@ \
 	$(GST_BASE_LIBS) \
 	$(GST_LIBS) \
-	$(ORC_LIBS)
+	$(ORC_LIBS) \
+	$(GNUSTL_LIBS) \
+	$(GMODULE_NO_EXPORT_LIBS) \
+	-L$(top_builddir)/sys/androidmedia/L/libs \
+	-landroid_runtime \
+	-lutils
+
 libgstandroidmedia_la_LDFLAGS = $(GST_PLUGIN_LDFLAGS)
 libgstandroidmedia_la_LIBTOOLFLAGS = $(GST_PLUGIN_LIBTOOLFLAGS)
 
