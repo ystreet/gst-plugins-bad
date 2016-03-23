@@ -27,6 +27,8 @@
 #include "gl.h"
 #include "gstglupload.h"
 
+#include <gst/video/gstvideoaffinetransformationmeta.h>
+
 #if GST_GL_HAVE_PLATFORM_EGL
 #include "egl/gsteglimagememory.h"
 #endif
@@ -315,8 +317,8 @@ _gl_memory_upload_propose_allocation (gpointer impl, GstQuery * decide_query,
     gst_allocation_params_init (&params);
 
     allocator =
-        GST_ALLOCATOR (gst_gl_memory_allocator_get_default (upload->
-            upload->context));
+        GST_ALLOCATOR (gst_gl_memory_allocator_get_default (upload->upload->
+            context));
     gst_query_add_allocation_param (query, allocator, &params);
     gst_object_unref (allocator);
   }
@@ -570,6 +572,47 @@ _egl_image_upload_propose_allocation (gpointer impl, GstQuery * decide_query,
   }
 }
 
+static const gfloat xflip_matrix[] = {
+  -1.0, 0.0, 0.0, 0.0,
+  0.0, 1.0, 0.0, 0.0,
+  0.0, 0.0, 1.0, 0.0,
+  1.0, 0.0, 0.0, 1.0,
+};
+
+static const gfloat yflip_matrix[] = {
+  1.0, 0.0, 0.0, 0.0,
+  0.0, -1.0, 0.0, 0.0,
+  0.0, 0.0, 1.0, 0.0,
+  0.0, 1.0, 0.0, 1.0,
+};
+
+static void
+_affine_meta_apply_orientation (GstVideoAffineTransformationMeta * affine_meta,
+    GstVideoGLTextureOrientation orientation)
+{
+  /* we render everything upside down internally as that's how they're stored
+   * in the textures so Y_FLIP is really Y_NORMAL for us */
+  switch (orientation) {
+    case GST_VIDEO_GL_TEXTURE_ORIENTATION_X_NORMAL_Y_FLIP:
+      gst_video_affine_transformation_meta_apply_matrix (affine_meta,
+          yflip_matrix);
+      break;
+    case GST_VIDEO_GL_TEXTURE_ORIENTATION_X_NORMAL_Y_NORMAL:
+      /* nothing to do */
+      break;
+    case GST_VIDEO_GL_TEXTURE_ORIENTATION_X_FLIP_Y_NORMAL:
+      gst_video_affine_transformation_meta_apply_matrix (affine_meta,
+          xflip_matrix);
+      break;
+    case GST_VIDEO_GL_TEXTURE_ORIENTATION_X_FLIP_Y_FLIP:
+      gst_video_affine_transformation_meta_apply_matrix (affine_meta,
+          yflip_matrix);
+      gst_video_affine_transformation_meta_apply_matrix (affine_meta,
+          xflip_matrix);
+      break;
+  }
+}
+
 static void
 _egl_image_upload_perform_gl_thread (GstGLContext * context,
     struct EGLImageUpload *image)
@@ -579,7 +622,7 @@ _egl_image_upload_perform_gl_thread (GstGLContext * context,
 
   allocator =
       GST_GL_MEMORY_ALLOCATOR (gst_allocator_find
-      (GST_GL_MEMORY_PBO_ALLOCATOR_NAME));
+      (GST_GL_MEMORY_ALLOCATOR_NAME));
 
   /* FIXME: buffer pool */
   *image->outbuf = gst_buffer_new ();
@@ -589,6 +632,22 @@ _egl_image_upload_perform_gl_thread (GstGLContext * context,
   gst_object_unref (allocator);
 
   n = gst_buffer_n_memory (image->buffer);
+  if (n > 0) {
+    GstMemory *mem = gst_buffer_peek_memory (image->buffer, 0);
+    GstVideoAffineTransformationMeta *in_affine_meta, *out_affine_meta;
+
+    in_affine_meta =
+        gst_buffer_get_video_affine_transformation_meta (image->buffer);
+    out_affine_meta =
+        gst_buffer_add_video_affine_transformation_meta (*image->outbuf);
+    if (in_affine_meta)
+      gst_video_affine_transformation_meta_apply_matrix (out_affine_meta,
+          in_affine_meta->matrix);
+
+    _affine_meta_apply_orientation (out_affine_meta,
+        gst_egl_image_memory_get_orientation (mem));
+  }
+
   for (i = 0; i < n; i++) {
     GstMemory *mem = gst_buffer_peek_memory (image->buffer, i);
     GstGLMemory *out_gl_mem =
@@ -1042,11 +1101,11 @@ _upload_meta_upload_propose_allocation (gpointer impl, GstQuery * decide_query,
   gpointer handle;
 
   gl_apis =
-      gst_gl_api_to_string (gst_gl_context_get_gl_api (upload->upload->
-          context));
-  platform =
-      gst_gl_platform_to_string (gst_gl_context_get_gl_platform (upload->
+      gst_gl_api_to_string (gst_gl_context_get_gl_api (upload->
           upload->context));
+  platform =
+      gst_gl_platform_to_string (gst_gl_context_get_gl_platform
+      (upload->upload->context));
   handle = (gpointer) gst_gl_context_get_gl_context (upload->upload->context);
 
   gl_context =
