@@ -44,6 +44,7 @@ struct _GstGLColorscale
     GstGLFilter filter;
 
     GstGLShader *shader;
+    const gfloat *transformation_matrix;
 };
 
 struct _GstGLColorscaleClass

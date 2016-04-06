@@ -48,6 +48,7 @@
 #endif
 
 #include "gstglcolorscale.h"
+#include <gst/video/gstvideoaffinetransformationmeta.h>
 
 
 #define GST_CAT_DEFAULT gst_gl_colorscale_debug
@@ -75,6 +76,8 @@ static void gst_gl_colorscale_gl_stop (GstGLBaseFilter * base_filter);
 
 static gboolean gst_gl_colorscale_filter_texture (GstGLFilter * filter,
     guint in_tex, guint out_tex);
+static gboolean gst_gl_colorscale_filter (GstGLFilter * filter,
+    GstBuffer * inbuf, GstBuffer * outbuf);
 
 static void
 gst_gl_colorscale_class_init (GstGLColorscaleClass * klass)
@@ -106,6 +109,7 @@ gst_gl_colorscale_class_init (GstGLColorscaleClass * klass)
   base_filter_class->supported_gl_api =
       GST_GL_API_OPENGL | GST_GL_API_OPENGL3 | GST_GL_API_GLES2;
 
+  filter_class->filter = gst_gl_colorscale_filter;
   filter_class->filter_texture = gst_gl_colorscale_filter_texture;
 }
 
@@ -136,18 +140,40 @@ gst_gl_colorscale_get_property (GObject * object, guint prop_id,
   }
 }
 
+static gfloat identity_matrix[] = {
+  1.0, 0.0f, 0.0, 0.0,
+  0.0, 1.0f, 0.0, 0.0,
+  0.0, 0.0f, 1.0, 0.0,
+  0.0, 0.0f, 0.0, 1.0,
+};
+
 static gboolean
 gst_gl_colorscale_gl_start (GstGLBaseFilter * base_filter)
 {
   GstGLColorscale *colorscale = GST_GL_COLORSCALE (base_filter);
   GstGLFilter *filter = GST_GL_FILTER (base_filter);
+  GstGLSLStage *frag_stage, *vert_stage;
   GstGLShader *shader;
   GError *error = NULL;
+  if (!(vert_stage = gst_glsl_stage_new_with_string (base_filter->context,
+              GL_VERTEX_SHADER, GST_GLSL_VERSION_NONE,
+              GST_GLSL_PROFILE_ES | GST_GLSL_PROFILE_COMPATIBILITY,
+              gst_gl_shader_string_vertex_mat4_texture_transform))) {
+    GST_ERROR_OBJECT (colorscale, "Failed to create vertex shader");
+    return FALSE;
+  }
 
-  if (!(shader = gst_gl_shader_new_default (base_filter->context, &error))) {
+  if (!(frag_stage =
+          gst_glsl_stage_new_default_fragment (base_filter->context))) {
+    GST_ERROR_OBJECT (colorscale, "Failed to create vertex shader");
+    return FALSE;
+  }
+
+  if (!(shader =
+          gst_gl_shader_new_link_with_stages (base_filter->context, &error,
+              vert_stage, frag_stage, NULL))) {
     GST_ERROR_OBJECT (colorscale, "Failed to initialize shader: %s",
         error->message);
-    gst_object_unref (shader);
     return FALSE;
   }
 
@@ -155,6 +181,11 @@ gst_gl_colorscale_gl_start (GstGLBaseFilter * base_filter)
       gst_gl_shader_get_attribute_location (shader, "a_position");
   filter->draw_attr_texture_loc =
       gst_gl_shader_get_attribute_location (shader, "a_texcoord");
+
+  gst_gl_shader_use (shader);
+  gst_gl_shader_set_uniform_matrix_4fv (shader,
+      "u_transformation", 1, FALSE, identity_matrix);
+  gst_gl_context_clear_shader (base_filter->context);
 
   colorscale->shader = shader;
 
@@ -174,15 +205,59 @@ gst_gl_colorscale_gl_stop (GstGLBaseFilter * base_filter)
   return GST_GL_BASE_FILTER_CLASS (parent_class)->gl_stop (base_filter);
 }
 
+static void
+_colorscale_cb (gint width, gint height, guint texture, gpointer stuff)
+{
+  GstGLFilter *filter = GST_GL_FILTER (stuff);
+  GstGLColorscale *colorscale = GST_GL_COLORSCALE (stuff);
+  GstGLContext *context = GST_GL_BASE_FILTER (filter)->context;
+  const GstGLFuncs *gl = context->gl_vtable;
+
+#if GST_GL_HAVE_OPENGL
+  if (gst_gl_context_get_gl_api (context) & GST_GL_API_OPENGL) {
+    gl->MatrixMode (GL_PROJECTION);
+    gl->LoadIdentity ();
+  }
+#endif
+
+  gst_gl_shader_use (colorscale->shader);
+
+  gl->ActiveTexture (GL_TEXTURE1);
+  gl->BindTexture (GL_TEXTURE_2D, texture);
+
+  gst_gl_shader_set_uniform_1i (colorscale->shader, "tex", 1);
+  gst_gl_shader_set_uniform_1f (colorscale->shader, "width", width);
+  gst_gl_shader_set_uniform_1f (colorscale->shader, "height", height);
+  gst_gl_shader_set_uniform_matrix_4fv (colorscale->shader,
+      "u_transformation", 1, FALSE, colorscale->transformation_matrix);
+
+  gst_gl_filter_draw_texture (filter, texture, width, height);
+}
+
 static gboolean
 gst_gl_colorscale_filter_texture (GstGLFilter * filter, guint in_tex,
     guint out_tex)
 {
   GstGLColorscale *colorscale = GST_GL_COLORSCALE (filter);
 
-  if (gst_gl_context_get_gl_api (GST_GL_BASE_FILTER (filter)->context))
-    gst_gl_filter_render_to_target_with_shader (filter, TRUE, in_tex, out_tex,
-        colorscale->shader);
+  gst_gl_filter_render_to_target (filter, TRUE, in_tex, out_tex,
+      (GLCB) _colorscale_cb, colorscale);
 
   return TRUE;
+}
+
+static gboolean
+gst_gl_colorscale_filter (GstGLFilter * filter, GstBuffer * inbuf,
+    GstBuffer * outbuf)
+{
+  GstGLColorscale *colorscale = GST_GL_COLORSCALE (filter);
+  GstVideoAffineTransformationMeta *af_meta;
+
+  af_meta = gst_buffer_get_video_affine_transformation_meta (inbuf);
+  if (af_meta)
+    colorscale->transformation_matrix = af_meta->matrix;
+  else
+    colorscale->transformation_matrix = identity_matrix;
+
+  return gst_gl_filter_filter_texture (filter, inbuf, outbuf);
 }
