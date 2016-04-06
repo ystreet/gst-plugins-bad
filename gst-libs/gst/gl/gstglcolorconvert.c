@@ -27,6 +27,7 @@
 
 #include "gl.h"
 #include "gstglcolorconvert.h"
+#include <gst/video/gstvideoaffinetransformationmeta.h>
 
 /**
  * SECTION:gstglcolorconvert
@@ -55,6 +56,13 @@ static gboolean _do_convert_draw (GstGLContext * context,
     GstGLColorConvert * convert);
 
 /* *INDENT-OFF* */
+
+static gfloat identity_matrix[] = {
+  1.0, 0.0f, 0.0, 0.0,
+  0.0, 1.0f, 0.0, 0.0,
+  0.0, 0.0f, 1.0, 0.0,
+  0.0, 0.0f, 0.0, 1.0,
+};
 
 #define YUV_TO_RGB_COEFFICIENTS \
       "uniform vec3 offset;\n" \
@@ -364,16 +372,6 @@ static const struct shader_templ templ_RGB_to_YUY2_UYVY =
     "}\n",
     GST_GL_TEXTURE_TARGET_2D
   };
-
-static const gchar text_vertex_shader[] =
-    "attribute vec4 a_position;   \n"
-    "attribute vec2 a_texcoord;   \n"
-    "varying vec2 v_texcoord;     \n"
-    "void main()                  \n"
-    "{                            \n"
-    "  gl_Position = a_position; \n"
-    "  v_texcoord = a_texcoord;  \n"
-    "}                            \n";
 
 static const GLfloat vertices[] = {
      1.0f, -1.0f, 0.0f, 1.0f, 0.0f,
@@ -1934,9 +1932,9 @@ _create_shader (GstGLColorConvert * convert)
   ret = gst_gl_shader_new (convert->context);
 
   tmp =
-      _mangle_shader (text_vertex_shader, GL_VERTEX_SHADER, info->templ->target,
-      convert->priv->from_texture_target, gl_api, gl_major, gl_minor, &version,
-      &profile);
+      _mangle_shader (gst_gl_shader_string_vertex_mat4_texture_transform,
+      GL_VERTEX_SHADER, info->templ->target, convert->priv->from_texture_target,
+      gl_api, gl_major, gl_minor, &version, &profile);
 
   tmp1 = gst_glsl_version_profile_to_string (version, profile);
   version_str = g_strdup_printf ("#version %s\n", tmp1);
@@ -2184,6 +2182,8 @@ _init_convert (GstGLColorConvert * convert)
       GST_VIDEO_INFO_WIDTH (&convert->in_info));
   gst_gl_shader_set_uniform_1f (convert->shader, "height",
       GST_VIDEO_INFO_HEIGHT (&convert->in_info));
+  gst_gl_shader_set_uniform_matrix_4fv (convert->shader,
+      "u_transformation", 1, FALSE, identity_matrix);
 
   if (convert->priv->from_texture_target == GST_GL_TEXTURE_TARGET_RECTANGLE) {
     gst_gl_shader_set_uniform_1f (convert->shader, "poffset_x", 1.);
@@ -2645,6 +2645,18 @@ _do_convert_draw (GstGLContext * context, GstGLColorConvert * convert)
   gl->Viewport (0, 0, out_width, out_height);
 
   gst_gl_shader_use (convert->shader);
+
+  {
+    GstVideoAffineTransformationMeta *af_meta;
+
+    af_meta = gst_buffer_get_video_affine_transformation_meta (convert->inbuf);
+    if (af_meta)
+      gst_gl_shader_set_uniform_matrix_4fv (convert->shader,
+          "u_transformation", 1, FALSE, af_meta->matrix);
+    else
+      gst_gl_shader_set_uniform_matrix_4fv (convert->shader,
+          "u_transformation", 1, FALSE, identity_matrix);
+  }
 
   if (gl->BindVertexArray)
     gl->BindVertexArray (convert->priv->vao);
