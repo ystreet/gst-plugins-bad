@@ -284,7 +284,6 @@ plugin_init (GstPlugin * plugin)
     return FALSE;
   }
 #endif
-
   return TRUE;
 }
 

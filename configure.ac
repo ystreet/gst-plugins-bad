@@ -3097,6 +3097,12 @@ AG_GST_CHECK_FEATURE(VULKAN, [Vulkan elements], vulkan, [
   ], [])
 ])
 
+dnl *** Assimp ***
+translit(dnm, m, l) AM_CONDITIONAL(USE_ASSIMP, true)
+AG_GST_CHECK_FEATURE(ASSIMP, [Assimp elements], assimp, [
+  AG_GST_PKG_CHECK_MODULES(ASSIMP, assimp)
+])
+
 dnl *** teletextdec ***
 translit(dnm, m, l) AM_CONDITIONAL(USE_TELETEXTDEC, true)
 AG_GST_CHECK_FEATURE(TELETEXTDEC, [Teletext decoder], teletextdec, [
@@ -3748,6 +3754,7 @@ tests/examples/waylandsink/Makefile
 tests/icles/Makefile
 ext/voamrwbenc/Makefile
 ext/voaacenc/Makefile
+ext/assimp/Makefile
 ext/assrender/Makefile
 ext/bs2b/Makefile
 ext/bz2/Makefile
