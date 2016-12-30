@@ -282,6 +282,7 @@ check_PROGRAMS = \
 	elements/rtponviftimestamp \
 	elements/id3mux \
 	pipelines/mxf \
+	libs/3dvertex \
 	libs/isoff \
 	libs/mpegvideoparser \
 	libs/mpegts \
@@ -349,6 +350,15 @@ libs_isoff_CFLAGS = $(AM_CFLAGS) $(GST_BASE_CFLAGS) $(GST_PLUGINS_BAD_CFLAGS)
 libs_isoff_LDADD = $(LDADD) $(GST_BASE_LIBS) \
 	$(top_builddir)/gst-libs/gst/isoff/libgstisoff-@GST_API_VERSION@.la
 libs_isoff_SOURCES = libs/isoff.c
+
+libs_3dvertex_CFLAGS = \
+	$(GST_PLUGINS_BAD_CFLAGS) $(GST_PLUGINS_BASE_CFLAGS) \
+	-DGST_USE_UNSTABLE_API \
+	$(GST_BASE_CFLAGS) $(GST_CFLAGS) $(AM_CFLAGS)
+
+libs_3dvertex_LDADD = \
+	$(top_builddir)/gst-libs/gst/3d/libgst3d-@GST_API_VERSION@.la \
+	$(GST_BASE_LIBS) $(GST_LIBS) $(LDADD)
 
 libs_mpegvideoparser_CFLAGS = \
 	$(GST_PLUGINS_BAD_CFLAGS) $(GST_PLUGINS_BASE_CFLAGS) \

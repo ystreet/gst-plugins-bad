@@ -439,6 +439,7 @@ AG_GST_DEFAULT_ELEMENTS
 dnl *** plug-ins to include ***
 
 dnl these are all the gst plug-ins, compilable without additional libs
+AG_GST_CHECK_PLUGIN(3d)
 AG_GST_CHECK_PLUGIN(accurip)
 AG_GST_CHECK_PLUGIN(adpcmdec)
 AG_GST_CHECK_PLUGIN(adpcmenc)
@@ -3592,6 +3593,7 @@ Makefile
 common/Makefile
 common/m4/Makefile
 gst/Makefile
+gst/3d/Makefile
 gst/accurip/Makefile
 gst/adpcmdec/Makefile
 gst/adpcmenc/Makefile
@@ -3656,6 +3658,7 @@ gst/yadif/Makefile
 gst/compositor/Makefile
 gst-libs/Makefile
 gst-libs/gst/Makefile
+gst-libs/gst/3d/Makefile
 gst-libs/gst/adaptivedemux/Makefile
 gst-libs/gst/basecamerabinsrc/Makefile
 gst-libs/gst/gl/Makefile
