@@ -44,7 +44,8 @@ libgstopengl_la_SOURCES = \
 	gstglstereomix.c \
 	gltestsrc.c \
 	gstgltestsrc.c \
-	gstglutils.c
+	gstglutils.c \
+	gstglmodelrender.c
 
 noinst_HEADERS = \
 	gstglbasemixer.h \
@@ -71,7 +72,8 @@ noinst_HEADERS = \
 	gstglviewconvert.h \
 	gltestsrc.h \
 	gstgltestsrc.h \
-	gstglutils.h
+	gstglutils.h \
+	gstglmodelrender.h
 
 # full opengl required
 if USE_OPENGL
@@ -149,6 +151,7 @@ libgstopengl_la_LIBADD = \
 	$(top_builddir)/gst-libs/gst/gl/libgstgl-$(GST_API_VERSION).la \
 	$(top_builddir)/gst-libs/gst/base/libgstbadbase-$(GST_API_VERSION).la \
 	$(top_builddir)/gst-libs/gst/video/libgstbadvideo-$(GST_API_VERSION).la \
+	$(top_builddir)/gst-libs/gst/3d/libgst3d-$(GST_API_VERSION).la \
 	$(GST_BASE_LIBS) \
 	$(GST_PLUGINS_BASE_LIBS) -lgstvideo-$(GST_API_VERSION) \
 	-lgstpbutils-$(GST_API_VERSION) \

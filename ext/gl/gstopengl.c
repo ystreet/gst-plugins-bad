@@ -64,6 +64,7 @@
 #include "gstglviewconvert.h"
 #include "gstgltestsrc.h"
 #include "gstgldeinterlace.h"
+#include "gstglmodelrender.h"
 
 #if HAVE_GRAPHENE
 #include "gstgltransformation.h"
@@ -234,6 +235,11 @@ plugin_init (GstPlugin * plugin)
 
   if (!gst_element_register (plugin, "gldeinterlace",
           GST_RANK_NONE, GST_TYPE_GL_DEINTERLACE)) {
+    return FALSE;
+  }
+
+  if (!gst_element_register (plugin, "glmodelrender",
+          GST_RANK_NONE, GST_TYPE_GL_MODEL_RENDER)) {
     return FALSE;
   }
 #if HAVE_JPEG
