@@ -23,6 +23,7 @@
 #endif
 
 #include <gst/gl/gl.h>
+#include <gst/gl/gstglfuncs.h>
 
 #include "gstglmodelrender.h"
 
@@ -46,6 +47,7 @@ struct _GstGLModelRenderPrivate
   guint vao;
   guint vbo_indices;
   gint draw_attr_position_loc;
+  gint draw_attr_texture0_loc;
 };
 
 /* Properties */
@@ -153,6 +155,8 @@ _create_sink_pad_template_caps (void)
 /* vertex source */
 static const gchar *cube_v_src =
     "attribute vec4 a_position;\n"
+    "attribute vec2 a_texcoord0;\n"
+    "varying vec2 v_texcoord0;\n"
     "const mat4 scale = \n"
     "   mat4 (0.75, 0.,   0.,   0.,\n"
     "         0.,  -0.75, 0.,   0.,\n"
@@ -161,6 +165,7 @@ static const gchar *cube_v_src =
     "void main()\n"
     "{\n"
     "   gl_Position = scale * a_position;\n"
+    "   v_texcoord0 = a_texcoord0;\n"
     "}\n";
 
 /* fragment source */
@@ -168,9 +173,11 @@ static const gchar *cube_f_src =
     "#ifdef GL_ES\n"
     "precision mediump float;\n"
     "#endif\n"
+    "varying vec2 v_texcoord0;\n"
+    "uniform sampler2D tex0;\n"
     "void main()\n"
     "{\n"
-    "  gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0);\n"
+    "  gl_FragColor = texture2D(tex0, v_texcoord0);\n"
     "}\n";
 /* *INDENT-ON* */
 
@@ -454,18 +461,24 @@ static void
 _bind_buffer (GstGLModelRender * model, Gst3DVertexInfo * vinfo)
 {
   const GstGLFuncs *gl = GST_GL_BASE_FILTER (model)->context->gl_vtable;
-  int idx = gst_3d_vertex_info_find_attribute_index (vinfo,
+  int pos_idx = gst_3d_vertex_info_find_attribute_index (vinfo,
       GST_3D_VERTEX_TYPE_POSITION, NULL);
-  g_assert (idx >= 0);
+  int tex_idx = gst_3d_vertex_info_find_attribute_index (vinfo,
+      GST_3D_VERTEX_TYPE_TEXTURE, NULL);
+  g_assert (pos_idx >= 0 && tex_idx >= 0);
 
   gl->BindBuffer (GL_ELEMENT_ARRAY_BUFFER, model->priv->vbo_indices);
   gl->BindBuffer (GL_ARRAY_BUFFER, model->priv->vbo);
 
   /* Load the vertex position */
+  /* FIXME: hardcoded format */
   gl->VertexAttribPointer (model->priv->draw_attr_position_loc, 3, GL_FLOAT,
-      GL_FALSE, vinfo->strides[idx], (void *) 0);
+      GL_FALSE, vinfo->strides[pos_idx], (void *) vinfo->offsets[pos_idx]);
+  gl->VertexAttribPointer (model->priv->draw_attr_texture0_loc, 2, GL_FLOAT,
+      GL_FALSE, vinfo->strides[tex_idx], (void *) vinfo->offsets[tex_idx]);
 
   gl->EnableVertexAttribArray (model->priv->draw_attr_position_loc);
+  gl->EnableVertexAttribArray (model->priv->draw_attr_texture0_loc);
 }
 
 static void
@@ -477,23 +490,18 @@ _unbind_buffer (GstGLModelRender * model)
   gl->BindBuffer (GL_ARRAY_BUFFER, 0);
 
   gl->DisableVertexAttribArray (model->priv->draw_attr_position_loc);
+  gl->DisableVertexAttribArray (model->priv->draw_attr_texture0_loc);
 }
 
 static gboolean
-_update_vertex_buffer (GstGLModelRender * model, GstBuffer * buffer,
+_update_vertex_buffer (GstGLModelRender * model, Gst3DModelMeta * meta,
     guint * n_indices, Gst3DVertexInfo ** vinfo)
 {
   const GstGLFuncs *gl = GST_GL_BASE_FILTER (model)->context->gl_vtable;
-  Gst3DModelMeta *meta;
   Gst3DVertexMeta *vmeta;
   Gst3DVertexMapInfo map_info;
 
-  meta = gst_buffer_get_3d_model_meta (buffer, 0);
-  if (!meta) {
-    GST_ERROR_OBJECT (model, "input buffer is missing Gst3DModelMeta");
-    return FALSE;
-  }
-  vmeta = gst_buffer_get_3d_vertex_meta (buffer, meta->vertex_id);
+  vmeta = gst_buffer_get_3d_vertex_meta (meta->buffer, meta->vertex_id);
   if (!meta) {
     GST_ERROR_OBJECT (model, "input buffer is missing Gst3DVertexMeta");
     return FALSE;
@@ -505,33 +513,77 @@ _update_vertex_buffer (GstGLModelRender * model, GstBuffer * buffer,
     return FALSE;
   }
 
-  if (!model->priv->vbo) {
-    if (gl->GenVertexArrays) {
-      gl->GenVertexArrays (1, &model->priv->vao);
-    }
-
-    gl->GenBuffers (1, &model->priv->vbo);
-    gl->GenBuffers (1, &model->priv->vbo_indices);
-  }
-
   if (gl->GenVertexArrays)
     gl->BindVertexArray (model->priv->vao);
   _bind_buffer (model, &vmeta->info);
 
-  /* XXX: hardcoded vertex attribute index */
-  gl->BufferData (GL_ARRAY_BUFFER, vmeta->n_vertices * vmeta->info.strides[0],
+  gl->BufferData (GL_ARRAY_BUFFER, map_info.vertex_map.size,
       map_info.vertex_data, GL_STATIC_DRAW);
 
   gl->BufferData (GL_ELEMENT_ARRAY_BUFFER, map_info.index_map.size,
       map_info.index_data, GL_STATIC_DRAW);
   *n_indices = vmeta->n_indices;
 
-  if (gl->GenVertexArrays)
-    gl->BindVertexArray (0);
-  gl->BindBuffer (GL_ARRAY_BUFFER, 0);
-  gl->BindBuffer (GL_ELEMENT_ARRAY_BUFFER, 0);
-
   return TRUE;
+}
+
+static GstGLMemory *
+_create_upload_texture (GstGLModelRender * model, Gst3DMaterialTexture * tex)
+{
+  GstGLContext *context = GST_GL_BASE_FILTER (model)->context;
+  GstGLMemoryAllocator *alloc = gst_gl_memory_allocator_get_default (context);
+  GstGLVideoAllocationParams *params;
+  GstGLMemory *ret;
+  GstCaps *caps = gst_sample_get_caps (tex->sample);
+  GstBuffer *buffer = gst_sample_get_buffer (tex->sample);
+  GstVideoFrame v_frame;
+  GstVideoInfo v_info;
+  GstMapInfo map_info;
+  GstGLFormat format;
+
+  if (!gst_video_info_from_caps (&v_info, caps))
+    return NULL;
+
+  if (!gst_video_frame_map (&v_frame, &v_info, buffer, GST_MAP_READ))
+    return NULL;
+
+  format = gst_gl_format_from_video_info (context, &v_info, 0);
+  params = gst_gl_video_allocation_params_new_wrapped_data (context,
+      NULL, &v_info, 0, NULL, GST_GL_TEXTURE_TARGET_2D, format,
+      v_frame.data[0], NULL, NULL);
+  ret = (GstGLMemory *) gst_gl_base_memory_alloc ((GstGLBaseMemoryAllocator *)
+      alloc, (GstGLAllocationParams *) params);
+  if (!gst_memory_map ((GstMemory *) ret, &map_info, GST_MAP_READ | GST_MAP_GL))
+    return NULL;
+
+  gst_memory_unmap ((GstMemory *) ret, &map_info);
+  gst_video_frame_unmap (&v_frame);
+
+  return ret;
+}
+
+static GstGLMemory *
+_update_materials (GstGLModelRender * model, Gst3DModelMeta * meta)
+{
+  GstGLContext *context = GST_GL_BASE_FILTER (model)->context;
+  const GstGLFuncs *gl = context->gl_vtable;
+  Gst3DMaterialMeta *mmeta;
+  Gst3DMaterialStack *diffuse;
+  Gst3DMaterialTexture *tex;
+  GstGLMemory *ret;
+
+  mmeta = gst_buffer_get_3d_material_meta (meta->buffer, meta->material_id);
+  diffuse =
+      gst_3d_material_meta_get_stack (mmeta, GST_3D_MATERIAL_ELEMENT_DIFFUSE);
+  tex = gst_3d_material_stack_get_texture (diffuse, 0);
+  ret = _create_upload_texture (model, tex);
+
+  gl->ActiveTexture (GL_TEXTURE0);
+  gl->BindTexture (GL_TEXTURE_2D, gst_gl_memory_get_texture_id (ret));
+
+  gst_gl_shader_set_uniform_1i (model->shader, "tex0", 0);
+
+  return ret;
 }
 
 static gboolean
@@ -593,6 +645,8 @@ _create_shader (GstGLModelRender * model)
   gst_gl_shader_use (model->shader);
   model->priv->draw_attr_position_loc =
       gst_gl_shader_get_attribute_location (model->shader, "a_position");
+  model->priv->draw_attr_texture0_loc =
+      gst_gl_shader_get_attribute_location (model->shader, "a_texcoord0");
   gst_gl_context_clear_shader (context);
 
   return TRUE;
@@ -604,26 +658,50 @@ gst_gl_model_render_draw (gpointer data)
   GstGLModelRender *model = data;
   GstGLContext *context = GST_GL_BASE_FILTER (model)->context;
   const GstGLFuncs *gl = context->gl_vtable;
+  const GstMetaInfo *info = GST_3D_MODEL_META_INFO;
+  gpointer state = NULL;
+  GstMeta *meta;
   Gst3DVertexInfo *vinfo;
   guint n_indices;
 
   if (!_create_shader (model))
     return FALSE;
-  if (!_update_vertex_buffer (model, model->in_buffer, &n_indices, &vinfo))
-    return FALSE;
+  gst_gl_shader_use (model->shader);
+
+  if (!model->priv->vbo) {
+    if (gl->GenVertexArrays) {
+      gl->GenVertexArrays (1, &model->priv->vao);
+    }
+
+    gl->GenBuffers (1, &model->priv->vbo);
+    gl->GenBuffers (1, &model->priv->vbo_indices);
+  }
 
   if (gl->GenVertexArrays)
     gl->BindVertexArray (model->priv->vao);
-  _bind_buffer (model, vinfo);
-
-  gst_gl_shader_use (model->shader);
 
   gl->Enable (GL_DEPTH_TEST);
   gl->ClearColor (0.0, 0.0, 0.0, 0.0);
   gl->Clear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-  /* FIXME: hardcoded index format */
-  gl->DrawElements (GL_TRIANGLES, n_indices, GL_UNSIGNED_SHORT, 0);
+  while ((meta = gst_buffer_iterate_meta (model->in_buffer, &state))) {
+    if (meta->info->api == info->api) {
+      Gst3DModelMeta *mmeta = (Gst3DModelMeta *) meta;
+      GstGLMemory *tex;
+
+      /* XXX: terribly inefficient */
+      if (!_update_vertex_buffer (model, mmeta, &n_indices, &vinfo))
+        return FALSE;
+      /* XXX: terribly inefficient */
+      if (!(tex = _update_materials (model, mmeta)))
+        return FALSE;
+
+      /* FIXME: hardcoded index format */
+      gl->DrawElements (GL_TRIANGLES, n_indices, GL_UNSIGNED_SHORT, 0);
+
+      gst_memory_unref ((GstMemory *) tex);
+    }
+  }
 
   gl->Disable (GL_DEPTH_TEST);
 
