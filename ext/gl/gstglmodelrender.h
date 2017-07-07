@@ -31,6 +31,9 @@
 
 G_BEGIN_DECLS
 
+GType gst_gl_model_render_bin_get_type(void);
+#define GST_TYPE_GL_MODEL_RENDER_BIN            (gst_gl_model_render_bin_get_type())
+
 GType gst_gl_model_render_get_type(void);
 #define GST_TYPE_GL_MODEL_RENDER            (gst_gl_model_render_get_type())
 #define GST_GL_MODEL_RENDER(obj)            (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_GL_MODEL_RENDER,GstGLModelRender))

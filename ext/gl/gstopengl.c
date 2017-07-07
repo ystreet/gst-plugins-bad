@@ -239,7 +239,7 @@ plugin_init (GstPlugin * plugin)
   }
 
   if (!gst_element_register (plugin, "glmodelrender",
-          GST_RANK_NONE, GST_TYPE_GL_MODEL_RENDER)) {
+          GST_RANK_NONE, GST_TYPE_GL_MODEL_RENDER_BIN)) {
     return FALSE;
   }
 #if HAVE_JPEG

@@ -30,16 +30,30 @@
 #define GST_CAT_DEFAULT gst_gl_model_render_debug
 GST_DEBUG_CATEGORY_STATIC (GST_CAT_DEFAULT);
 
-#define gst_gl_model_render_parent_class parent_class
-G_DEFINE_TYPE_WITH_CODE (GstGLModelRender, gst_gl_model_render,
-    GST_TYPE_GL_BASE_FILTER, GST_DEBUG_CATEGORY_INIT (gst_gl_model_render_debug,
-        "glmodelrender", 0, "glmodelrender element"););
+typedef struct _GstGLModelRenderBin GstGLModelRenderBin;
+typedef struct _GstGLModelRenderBinClass GstGLModelRenderBinClass;
 
-#define GST_GL_MODEL_RENDER_GET_PRIVATE(o) \
-  (G_TYPE_INSTANCE_GET_PRIVATE((o), GST_TYPE_GL_MODEL_RENDER, GstGLModelRenderPrivate))
+#define GST_GL_MODEL_RENDER_BIN(obj)            (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_GL_MODEL_RENDER_BIN,GstGLModelRenderBin))
+#define GST_IS_GL_MODEL_RENDER_BIN(obj)         (G_TYPE_CHECK_INSTANCE_TYPE((obj),GST_TYPE_GL_MODEL_RENDER_BIN))
+#define GST_GL_MODEL_RENDER_BIN_CLASS(klass)    (G_TYPE_CHECK_CLASS_CAST((klass) ,GST_TYPE_GL_MODEL_RENDER_BIN,GstGLModelRenderBinClass))
+#define GST_IS_GL_MODEL_RENDER_BIN_CLASS(klass) (G_TYPE_CHECK_CLASS_TYPE((klass) ,GST_TYPE_GL_MODEL_RENDER_BIN))
+#define GST_GL_MODEL_RENDER_BIN_GET_CLASS(obj)  (G_TYPE_INSTANCE_GET_CLASS((obj) ,GST_TYPE_GL_MODEL_RENDER_BIN,GstGLModelRenderBinClass))
 
-#define GST_GL_MODEL_RENDER_PAD_GET_PRIVATE(o) \
-  (G_TYPE_INSTANCE_GET_PRIVATE((o), GST_TYPE_GL_MODEL_RENDER_PAD, GstGLModelRenderPadPrivate))
+struct _GstGLModelRenderBin
+{
+  GstBin parent;
+
+  GstGLModelRender *model;
+  GstElement *gl_conversion;
+  GstElement *src;
+  GstElement *sink;
+  gboolean pulled_preroll;
+};
+
+struct _GstGLModelRenderBinClass
+{
+  GstBinClass parent_class;
+};
 
 struct _GstGLModelRenderPrivate
 {
@@ -48,38 +62,11 @@ struct _GstGLModelRenderPrivate
   guint vbo_indices;
   gint draw_attr_position_loc;
   gint draw_attr_texture0_loc;
+
+  GstGLModelRenderBin *model;
 };
 
-/* Properties */
-enum
-{
-  PROP_0,
-  PROP_CONTEXT
-};
-
-static void gst_gl_model_render_finalize (GObject * object);
-static void gst_gl_model_render_set_property (GObject * object, guint prop_id,
-    const GValue * value, GParamSpec * pspec);
-static void gst_gl_model_render_get_property (GObject * object, guint prop_id,
-    GValue * value, GParamSpec * pspec);
-
-static GstStateChangeReturn gst_gl_model_render_change_state (GstElement *
-    element, GstStateChange transition);
-static gboolean gst_gl_model_render_start (GstBaseTransform * btrans);
-static gboolean gst_gl_model_render_stop (GstBaseTransform * btrans);
-static GstCaps *gst_gl_model_render_fixate_caps (GstBaseTransform * btrans,
-    GstPadDirection direction, GstCaps * caps, GstCaps * othercaps);
-static GstCaps *gst_gl_model_render_transform_caps (GstBaseTransform * btrans,
-    GstPadDirection direction, GstCaps * caps, GstCaps * filter);
-static gboolean gst_gl_model_render_set_caps (GstBaseTransform * btrans,
-    GstCaps * incaps, GstCaps * outcaps);
-static gboolean gst_gl_model_render_decide_allocation (GstBaseTransform *
-    btrans, GstQuery * query);
-static GstFlowReturn gst_gl_model_render_transform (GstBaseTransform * btrans,
-    GstBuffer * inbuf, GstBuffer * outbuf);
-
-static gboolean gst_gl_model_render_gl_start (GstGLBaseFilter * base_filter);
-static void gst_gl_model_render_gl_stop (GstGLBaseFilter * base_filter);
+G_DEFINE_TYPE (GstGLModelRenderBin, gst_gl_model_render_bin, GST_TYPE_BIN);
 
 /* *INDENT-OFF* */
 static GstStaticPadTemplate src_pad_template =
@@ -96,8 +83,7 @@ static GstStaticPadTemplate src_pad_template =
 #define MODEL_CAPS \
     "application/3d-model, "                                                \
     "primitive-mode = (string) triangles, "                                \
-    "index-format = (string) U16LE, "                                        \
-    "shading = (string) phong "
+    "index-format = (string) U16LE "
 
 #define POSITION_ATTRIBUTE \
     "attribute, "                                                           \
@@ -132,12 +118,12 @@ _create_sink_pad_template_caps (void)
   gst_structure_free (attrib);
   gst_value_array_append_value (&attributes, &attrib_val);
 
-  attrib = gst_structure_from_string (TEXCOORD_ATTRIBUTE, NULL);
+  attrib = gst_structure_from_string (NORMAL_ATTRIBUTE, NULL);
   gst_value_set_structure (&attrib_val, attrib);
   gst_structure_free (attrib);
   gst_value_array_append_value (&attributes, &attrib_val);
 
-  attrib = gst_structure_from_string (NORMAL_ATTRIBUTE, NULL);
+  attrib = gst_structure_from_string (TEXCOORD_ATTRIBUTE, NULL);
   gst_value_set_structure (&attrib_val, attrib);
   gst_structure_free (attrib);
   gst_value_array_append_value (&attributes, &attrib_val);
@@ -151,6 +137,165 @@ _create_sink_pad_template_caps (void)
 
   return ret;
 }
+
+static void
+gst_gl_model_render_bin_init (GstGLModelRenderBin * model)
+{
+  GstPad *ghost, *pad;
+
+  model->model = g_object_new (GST_TYPE_GL_MODEL_RENDER, NULL);
+  model->model->priv->model = model;
+  gst_bin_add (GST_BIN (model), GST_ELEMENT (model->model));
+
+  pad = gst_element_get_static_pad (GST_ELEMENT (model->model), "src");
+  ghost = gst_ghost_pad_new ("src", pad);
+  gst_element_add_pad (GST_ELEMENT (model), ghost);
+
+  pad = gst_element_get_static_pad (GST_ELEMENT (model->model), "sink");
+  ghost = gst_ghost_pad_new ("sink", pad);
+  gst_element_add_pad (GST_ELEMENT (model), ghost);
+}
+
+static void
+gst_gl_model_render_bin_finalize (GObject * object)
+{
+  G_OBJECT_CLASS (gst_gl_model_render_bin_parent_class)->finalize (object);
+}
+
+static void
+gst_gl_model_render_bin_set_property (GObject * object, guint prop_id,
+    const GValue * value, GParamSpec * pspec)
+{
+  switch (prop_id) {
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+      break;
+  }
+}
+
+static void
+gst_gl_model_render_bin_get_property (GObject * object, guint prop_id,
+    GValue * value, GParamSpec * pspec)
+{
+  switch (prop_id) {
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+      break;
+  }
+}
+
+static GstStateChangeReturn
+gst_gl_model_render_bin_change_state (GstElement * element,
+    GstStateChange transition)
+{
+  GstGLModelRenderBin *model = GST_GL_MODEL_RENDER_BIN (element);
+  GstStateChangeReturn ret = GST_STATE_CHANGE_SUCCESS;
+
+  GST_DEBUG_OBJECT (model, "changing state: %s => %s",
+      gst_element_state_get_name (GST_STATE_TRANSITION_CURRENT (transition)),
+      gst_element_state_get_name (GST_STATE_TRANSITION_NEXT (transition)));
+
+  switch (transition) {
+    case GST_STATE_CHANGE_NULL_TO_READY:{
+      GError *error = NULL;
+      model->gl_conversion = gst_parse_bin_from_description ("appsrc name=src block=true ! glupload ! glcolorconvert ! video/x-raw(memory:GLMemory),format=RGBA,texture-target=2D ! appsink sync=false async=false name=sink", FALSE, &error);
+      if (!model->gl_conversion) {
+        GST_ELEMENT_ERROR (model, CORE, MISSING_PLUGIN,
+            ("%s", "Missing an element"), ("%s", error->message));
+        return GST_STATE_CHANGE_FAILURE;
+      }
+      gst_bin_add (GST_BIN (model), GST_ELEMENT (model->gl_conversion));
+
+      model->src = gst_bin_get_by_name (GST_BIN (model->gl_conversion), "src");
+      model->sink = gst_bin_get_by_name (GST_BIN (model->gl_conversion), "sink");
+      model->pulled_preroll = FALSE;
+      break;
+    }
+    default:
+      break;
+  }
+
+  ret = GST_ELEMENT_CLASS (gst_gl_model_render_bin_parent_class)->change_state (element, transition);
+  if (ret == GST_STATE_CHANGE_FAILURE)
+    return ret;
+
+  switch (transition) {
+    case GST_STATE_CHANGE_READY_TO_NULL:
+      gst_bin_remove (GST_BIN (model), GST_ELEMENT (model->gl_conversion));
+      gst_object_unref (model->src);
+      gst_object_unref (model->sink);
+      break;
+    default:
+      break;
+  }
+
+  return ret;
+}
+
+static void
+gst_gl_model_render_bin_class_init (GstGLModelRenderBinClass * klass)
+{
+  GObjectClass *gobject_class;
+  GstElementClass *element_class;
+  GstCaps *sink_caps_templ = _create_sink_pad_template_caps ();
+
+  gobject_class = (GObjectClass *) klass;
+  element_class = GST_ELEMENT_CLASS (klass);
+
+  gobject_class->finalize = gst_gl_model_render_bin_finalize;
+  gobject_class->set_property = gst_gl_model_render_bin_set_property;
+  gobject_class->get_property = gst_gl_model_render_bin_get_property;
+
+  element_class->change_state = gst_gl_model_render_bin_change_state;
+
+  gst_element_class_add_pad_template (element_class,
+      gst_pad_template_new ("sink", GST_PAD_SINK, GST_PAD_ALWAYS,
+          sink_caps_templ));
+  gst_element_class_add_static_pad_template (element_class, &src_pad_template);
+
+  gst_element_class_set_metadata (element_class, "OpenGL model render",
+      "Filter/Effect/Video/3D/Render", "OpenGL model render",
+      "Matthew Waters <matthew@centricular.com>");
+}
+
+#define gst_gl_model_render_parent_class parent_class
+G_DEFINE_TYPE_WITH_CODE (GstGLModelRender, gst_gl_model_render,
+    GST_TYPE_GL_BASE_FILTER, GST_DEBUG_CATEGORY_INIT (gst_gl_model_render_debug,
+        "glmodelrender", 0, "glmodelrender element"););
+
+#define GST_GL_MODEL_RENDER_GET_PRIVATE(o) \
+  (G_TYPE_INSTANCE_GET_PRIVATE((o), GST_TYPE_GL_MODEL_RENDER, GstGLModelRenderPrivate))
+
+/* Properties */
+enum
+{
+  PROP_0,
+  PROP_CONTEXT
+};
+
+static void gst_gl_model_render_finalize (GObject * object);
+static void gst_gl_model_render_set_property (GObject * object, guint prop_id,
+    const GValue * value, GParamSpec * pspec);
+static void gst_gl_model_render_get_property (GObject * object, guint prop_id,
+    GValue * value, GParamSpec * pspec);
+
+static GstStateChangeReturn gst_gl_model_render_change_state (GstElement *
+    element, GstStateChange transition);
+static gboolean gst_gl_model_render_start (GstBaseTransform * btrans);
+static gboolean gst_gl_model_render_stop (GstBaseTransform * btrans);
+static GstCaps *gst_gl_model_render_fixate_caps (GstBaseTransform * btrans,
+    GstPadDirection direction, GstCaps * caps, GstCaps * othercaps);
+static GstCaps *gst_gl_model_render_transform_caps (GstBaseTransform * btrans,
+    GstPadDirection direction, GstCaps * caps, GstCaps * filter);
+static gboolean gst_gl_model_render_set_caps (GstBaseTransform * btrans,
+    GstCaps * incaps, GstCaps * outcaps);
+static gboolean gst_gl_model_render_decide_allocation (GstBaseTransform *
+    btrans, GstQuery * query);
+static GstFlowReturn gst_gl_model_render_transform (GstBaseTransform * btrans,
+    GstBuffer * inbuf, GstBuffer * outbuf);
+
+static gboolean gst_gl_model_render_gl_start (GstGLBaseFilter * base_filter);
+static void gst_gl_model_render_gl_stop (GstGLBaseFilter * base_filter);
 
 /* vertex source */
 static const gchar *cube_v_src =
@@ -527,39 +672,78 @@ _update_vertex_buffer (GstGLModelRender * model, Gst3DModelMeta * meta,
   return TRUE;
 }
 
+
+
+static GQuark
+_gl_memory_quark (void)
+{
+  static GQuark quark = 0;
+
+  if (!quark)
+    quark = g_quark_from_static_string ("GstGLModelRenderGLMemory");
+
+  return quark;
+}
+
+static GstMemory *
+_get_cached_gl_memory (GstBuffer * buf)
+{
+  return gst_mini_object_get_qdata (GST_MINI_OBJECT (buf), _gl_memory_quark ());
+}
+
+static void
+_set_cached_gl_memory (GstBuffer * buf, GstMemory * gl_mem)
+{
+  return gst_mini_object_set_qdata (GST_MINI_OBJECT (buf),
+      _gl_memory_quark (), gl_mem, (GDestroyNotify) gst_memory_unref);
+}
+
 static GstGLMemory *
 _create_upload_texture (GstGLModelRender * model, Gst3DMaterialTexture * tex)
 {
-  GstGLContext *context = GST_GL_BASE_FILTER (model)->context;
-  GstGLMemoryAllocator *alloc = gst_gl_memory_allocator_get_default (context);
-  GstGLVideoAllocationParams *params;
-  GstGLMemory *ret;
-  GstCaps *caps = gst_sample_get_caps (tex->sample);
-  GstBuffer *buffer = gst_sample_get_buffer (tex->sample);
-  GstVideoFrame v_frame;
-  GstVideoInfo v_info;
-  GstMapInfo map_info;
-  GstGLFormat format;
+  GstFlowReturn flow_ret;
+  GstSample *gl_sample;
+  GstBuffer *buf, *gl_buf;
+  GstMemory *ret;
 
-  if (!gst_video_info_from_caps (&v_info, caps))
+  buf = gst_sample_get_buffer (tex->sample);
+  ret = _get_cached_gl_memory (buf);
+  if (ret)
+    return (GstGLMemory *) gst_memory_ref (ret);
+
+  GST_ERROR ("%p", gst_sample_get_buffer (tex->sample));
+  g_signal_emit_by_name (model->priv->model->src, "push-sample", tex->sample,
+      &flow_ret);
+  GST_ERROR ("%p", gst_sample_get_buffer (tex->sample));
+  if (flow_ret != GST_FLOW_OK)
     return NULL;
 
-  if (!gst_video_frame_map (&v_frame, &v_info, buffer, GST_MAP_READ))
+  GST_ERROR ("%p", gst_sample_get_buffer (tex->sample));
+  if (model->priv->model->pulled_preroll)
+    g_signal_emit_by_name (model->priv->model->sink, "pull-sample", &gl_sample);
+  else
+    g_signal_emit_by_name (model->priv->model->sink, "pull-preroll",
+        &gl_sample);
+  GST_ERROR ("%p", gst_sample_get_buffer (tex->sample));
+  if (!gl_sample)
     return NULL;
 
-  format = gst_gl_format_from_video_info (context, &v_info, 0);
-  params = gst_gl_video_allocation_params_new_wrapped_data (context,
-      NULL, &v_info, 0, NULL, GST_GL_TEXTURE_TARGET_2D, format,
-      v_frame.data[0], NULL, NULL);
-  ret = (GstGLMemory *) gst_gl_base_memory_alloc ((GstGLBaseMemoryAllocator *)
-      alloc, (GstGLAllocationParams *) params);
-  if (!gst_memory_map ((GstMemory *) ret, &map_info, GST_MAP_READ | GST_MAP_GL))
+  gl_buf = gst_sample_get_buffer (gl_sample);
+  if (!gl_buf) {
+    gst_sample_unref (gl_sample);
     return NULL;
+  }
 
-  gst_memory_unmap ((GstMemory *) ret, &map_info);
-  gst_video_frame_unmap (&v_frame);
+  ret = gst_buffer_peek_memory (gl_buf, 0);
+  if (!gst_is_gl_memory (ret)) {
+    gst_sample_unref (gl_sample);
+    return NULL;
+  }
 
-  return ret;
+  _set_cached_gl_memory (buf, gst_memory_ref (ret));
+  gst_sample_unref (gl_sample);
+
+  return (GstGLMemory *) gst_memory_ref (ret);
 }
 
 static GstGLMemory *
@@ -570,13 +754,18 @@ _update_materials (GstGLModelRender * model, Gst3DModelMeta * meta)
   Gst3DMaterialMeta *mmeta;
   Gst3DMaterialStack *diffuse;
   Gst3DMaterialTexture *tex;
+  GstBuffer *buf;
   GstGLMemory *ret;
 
   mmeta = gst_buffer_get_3d_material_meta (meta->buffer, meta->material_id);
   diffuse =
       gst_3d_material_meta_get_stack (mmeta, GST_3D_MATERIAL_ELEMENT_DIFFUSE);
   tex = gst_3d_material_stack_get_texture (diffuse, 0);
-  ret = _create_upload_texture (model, tex);
+  if (!tex)
+    return NULL;
+  buf = gst_sample_get_buffer (tex->sample);
+  ret = (GstGLMemory *) _get_cached_gl_memory (buf);
+  g_assert (ret);               /* no funny business now */
 
   gl->ActiveTexture (GL_TEXTURE0);
   gl->BindTexture (GL_TEXTURE_2D, gst_gl_memory_get_texture_id (ret));
@@ -714,6 +903,46 @@ gst_gl_model_render_draw (gpointer data)
   return TRUE;
 }
 
+static GstGLMemory *
+_upload_material (GstGLModelRender * model, Gst3DModelMeta * meta)
+{
+  Gst3DMaterialMeta *mmeta;
+  Gst3DMaterialStack *diffuse;
+  Gst3DMaterialTexture *tex;
+  GstGLMemory *ret;
+
+  mmeta = gst_buffer_get_3d_material_meta (meta->buffer, meta->material_id);
+  diffuse =
+      gst_3d_material_meta_get_stack (mmeta, GST_3D_MATERIAL_ELEMENT_DIFFUSE);
+  if (!(tex = gst_3d_material_stack_get_texture (diffuse, 0)))
+    return NULL;
+
+  ret = _create_upload_texture (model, tex);
+
+  return ret;
+}
+
+static gboolean
+_upload_materials (GstGLModelRender * model)
+{
+  const GstMetaInfo *info = GST_3D_MODEL_META_INFO;
+  gpointer state = NULL;
+  GstMeta *meta;
+
+  while ((meta = gst_buffer_iterate_meta (model->in_buffer, &state))) {
+    if (meta->info->api == info->api) {
+      Gst3DModelMeta *mmeta = (Gst3DModelMeta *) meta;
+      GstGLMemory *tex;
+
+      /* XXX: terribly inefficient */
+      if (!(tex = _upload_material (model, mmeta)))
+        return FALSE;
+    }
+  }
+
+  return TRUE;
+}
+
 static void
 _process_model_gl (GstGLContext * context, GstGLModelRender * model)
 {
@@ -732,6 +961,9 @@ gst_gl_model_render_transform (GstBaseTransform * btrans,
 
   model->in_buffer = inbuf;
   model->out_buffer = outbuf;
+
+  _upload_materials (model);
+
   gst_gl_context_thread_add (GST_GL_BASE_FILTER (model)->context,
       (GstGLContextThreadFunc) _process_model_gl, model);
 
