@@ -325,9 +325,20 @@ gst_3d_material_stack_set_n_textures (Gst3DMaterialStack * stack,
   }
 }
 
+int
+gst_3d_material_stack_get_n_textures (Gst3DMaterialStack * stack)
+{
+  g_return_val_if_fail (stack != NULL, 0);
+
+  return stack->textures->len;
+}
+
 Gst3DMaterialTexture *
 gst_3d_material_stack_get_texture (Gst3DMaterialStack * stack, int i)
 {
+  g_return_val_if_fail (stack != NULL, NULL);
+  g_return_val_if_fail (i < gst_3d_material_stack_get_n_textures (stack), NULL);
+
   return nth_texture (stack, i);
 }
 

@@ -135,6 +135,7 @@ void                                gst_3d_material_stack_copy_into             
                                                                                  Gst3DMaterialStack * dest);
 Gst3DMaterialTexture *              gst_3d_material_stack_get_texture           (Gst3DMaterialStack * stack,
                                                                                  int i);
+int                                 gst_3d_material_stack_get_n_textures        (Gst3DMaterialStack * stack);
 void                                gst_3d_material_stack_set_n_textures        (Gst3DMaterialStack * stack,
                                                                                  guint n_textures);
 

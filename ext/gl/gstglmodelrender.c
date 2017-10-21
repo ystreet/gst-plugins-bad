@@ -30,6 +30,67 @@
 #define GST_CAT_DEFAULT gst_gl_model_render_debug
 GST_DEBUG_CATEGORY_STATIC (GST_CAT_DEFAULT);
 
+#define MAX_LIGHTS 3
+#define MAX_TEXTURES_PER_STACK 4
+#define MAX_UV 8
+
+#define OP_ADD 1
+
+#define SHADING_NONE 0
+#define SHADING_PHONG 1
+#define SHADING_GOURAD 2
+
+struct Vec2
+{
+  float x, y;
+};
+
+struct Vec3
+{
+  float x, y, z;
+};
+
+struct Vec4
+{
+  float x, y, z, w;
+};
+
+struct Light
+{
+  struct Vec4 position;
+  struct Vec3 color;
+  float attuention;
+  float ambient_coefficient;
+  float cone_angle;
+  struct Vec3 cone_direction;
+};
+
+struct MaterialItem
+{
+  struct Vec4 base_color;
+  int n_textures;
+  int texture_shader_loc;
+  int texture_unit;
+  int uv_index;
+  float blend;
+  int op;
+};
+
+struct Material
+{
+  struct MaterialItem diffuse;
+};
+
+struct Model
+{
+  struct Material material;
+  guint position_loc;
+  guint vao;
+  guint vbo;
+  guint vbo_indices;
+  guint uv_loc[MAX_UV];
+};
+
 typedef struct _GstGLModelRenderBin GstGLModelRenderBin;
 typedef struct _GstGLModelRenderBinClass GstGLModelRenderBinClass;
 
@@ -57,13 +118,10 @@ struct _GstGLModelRenderBinClass
 
 struct _GstGLModelRenderPrivate
 {
-  guint vbo;
-  guint vao;
-  guint vbo_indices;
-  gint draw_attr_position_loc;
-  gint draw_attr_texture0_loc;
+  GstGLModelRenderBin *parent;
 
-  GstGLModelRenderBin *model;
+  struct Model model;
+  struct Light lights[MAX_LIGHTS];
 };
 
 G_DEFINE_TYPE (GstGLModelRenderBin, gst_gl_model_render_bin, GST_TYPE_BIN);
@@ -144,7 +202,7 @@ gst_gl_model_render_bin_init (GstGLModelRenderBin * model)
   GstPad *ghost, *pad;
 
   model->model = g_object_new (GST_TYPE_GL_MODEL_RENDER, NULL);
-  model->model->priv->model = model;
+  model->model->priv->parent = model;
   gst_bin_add (GST_BIN (model), GST_ELEMENT (model->model));
 
   pad = gst_element_get_static_pad (GST_ELEMENT (model->model), "src");
@@ -299,9 +357,10 @@ static void gst_gl_model_render_gl_stop (GstGLBaseFilter * base_filter);
 
 /* vertex source */
 static const gchar *cube_v_src =
-    "attribute vec4 a_position;\n"
-    "attribute vec2 a_texcoord0;\n"
-    "varying vec2 v_texcoord0;\n"
+    "#version 150\n"
+    "in vec4 a_position;\n"
+    "in vec2 uv[" G_STRINGIFY (MAX_UV) "];\n"
+    "out vec2 out_uv[" G_STRINGIFY (MAX_UV) "];\n"
     "const mat4 scale = \n"
     "   mat4 (0.75, 0.,   0.,   0.,\n"
     "         0.,  -0.75, 0.,   0.,\n"
@@ -309,20 +368,81 @@ static const gchar *cube_v_src =
     "         0.,   0.,   0.,   1.);\n"
     "void main()\n"
     "{\n"
-    "   gl_Position = scale * a_position;\n"
-    "   v_texcoord0 = a_texcoord0;\n"
+    "  gl_Position = scale * a_position;\n"
+    "  for (int i = 0; i < " G_STRINGIFY (MAX_UV) "; i++) {\n"
+    "    out_uv[i] = uv[i];\n"
+    "  }\n"
     "}\n";
 
 /* fragment source */
 static const gchar *cube_f_src =
-    "#ifdef GL_ES\n"
-    "precision mediump float;\n"
-    "#endif\n"
-    "varying vec2 v_texcoord0;\n"
-    "uniform sampler2D tex0;\n"
+    "#version 150\n"
+    "in vec2 out_uv[" G_STRINGIFY (MAX_UV) "];\n"
+    "struct MaterialItem {\n"
+    "  vec3 base_color;\n"
+    "  int n_textures;\n"
+    "  sampler2D tex[" G_STRINGIFY (MAX_TEXTURES_PER_STACK) "];\n"
+    "  int uv_index[" G_STRINGIFY (MAX_TEXTURES_PER_STACK) "];\n"
+    "  float blend[" G_STRINGIFY (MAX_TEXTURES_PER_STACK) "];\n"
+    "  int op[" G_STRINGIFY (MAX_TEXTURES_PER_STACK) "];\n"
+    "};\n"
+    "struct Material {\n"
+    "  MaterialItem diffuse;\n"
+    "};\n"
+    "struct Light {\n"
+    "  vec4 position;\n"
+    "  vec3 color;\n"
+    "  float attuentation;\n"
+    "  float ambient_coefficient;\n"
+    "  float cone_angle;\n"
+    "  vec3 cone_direction;\n"
+    "};\n"
+    "uniform Material material;\n"
+    "uniform int n_lights;\n"
+    "uniform Light lights[" G_STRINGIFY(MAX_LIGHTS) "];\n"
+    "uniform int shading_model;\n"
+    "vec3 evaluate_texture_stack(MaterialItem item) {\n"
+    "  vec3 color = item.base_color;\n"
+    "  for (int i = 0; i < item.n_textures; i++) {\n"
+    "    vec3 c = texture2D(item.tex[i], out_uv[item.uv_index[i]]).rgb;\n"
+    "    c *= item.blend[i];\n"
+    "    int op = item.op[i];\n"
+    "    if (op == " G_STRINGIFY (OP_ADD) ") {\n"
+    "      color += c;\n"
+    "    }\n"
+    "  }\n"
+    "  return color;\n"
+    "}\n"
+    "vec3 calculate_diffuse() {\n"
+    "  if (shading_model == " G_STRINGIFY(SHADING_NONE) ")\n"
+    "    return vec3 (1.0);\n"
+    "  vec3 intensity = vec3(0.0);\n"
+    "  for (int i = 0; i < n_lights; i++) {\n"
+    "    float fac = 1.0;\n"
+    "    if (shading_model == " G_STRINGIFY (SHADING_PHONG) ")\n"
+    "      return vec3(0.5);\n" /* FIXME */
+    "  }\n"
+    "  return vec3(0.5);\n" /* FIXME */
+    "}\n"
+    "vec3 calculate_specular() {\n"
+    "  return vec3(0.0);\n"
+    "}\n"
+    "vec3 calculate_ambient() {\n"
+    "  if (shading_model == " G_STRINGIFY(SHADING_NONE) ")\n"
+    "    return vec3 (0.0);\n"
+    "  return vec3(0.0);\n"
+    "}\n"
+    "vec4 pimp_the_pixel(vec4 prev) {\n"
+    "  vec3 diff = calculate_diffuse ();\n"
+    "  vec3 spec = calculate_specular ();\n"
+    "  vec3 amb = calculate_ambient ();\n"
+    "  vec3 color = diff + spec + amb;\n"
+    "  float opacity = 1.0;\n"
+    "  return vec4(color, opacity);\n"
+    "}\n"
     "void main()\n"
     "{\n"
-    "  gl_FragColor = texture2D(tex0, v_texcoord0);\n"
+    "  gl_FragColor = pimp_the_pixel(vec4 (vec3(0.0), 1.0));\n"
     "}\n";
 /* *INDENT-ON* */
 
@@ -375,6 +495,8 @@ static void
 gst_gl_model_render_init (GstGLModelRender * model)
 {
   model->priv = GST_GL_MODEL_RENDER_GET_PRIVATE (model);
+
+//  model->priv->lights[0]
 }
 
 static void
@@ -602,40 +724,65 @@ gst_gl_model_render_change_state (GstElement * element,
   return ret;
 }
 
+static guint
+_3d_vertex_format_to_gl_enum (Gst3DVertexFormat format)
+{
+  switch (format) {
+    case GST_3D_VERTEX_FORMAT_F32:
+      return GL_FLOAT;
+    case GST_3D_VERTEX_FORMAT_U16:
+      return GL_UNSIGNED_SHORT;
+    default:
+      g_assert_not_reached ();
+      return 0;
+  }
+}
+
 static void
 _bind_buffer (GstGLModelRender * model, Gst3DVertexInfo * vinfo)
 {
   const GstGLFuncs *gl = GST_GL_BASE_FILTER (model)->context->gl_vtable;
   int pos_idx = gst_3d_vertex_info_find_attribute_index (vinfo,
       GST_3D_VERTEX_TYPE_POSITION, NULL);
-  int tex_idx = gst_3d_vertex_info_find_attribute_index (vinfo,
-      GST_3D_VERTEX_TYPE_TEXTURE, NULL);
-  g_assert (pos_idx >= 0 && tex_idx >= 0);
+  int i, n;
 
-  gl->BindBuffer (GL_ELEMENT_ARRAY_BUFFER, model->priv->vbo_indices);
-  gl->BindBuffer (GL_ARRAY_BUFFER, model->priv->vbo);
+  gl->BindBuffer (GL_ELEMENT_ARRAY_BUFFER, model->priv->model.vbo_indices);
+  gl->BindBuffer (GL_ARRAY_BUFFER, model->priv->model.vbo);
 
   /* Load the vertex position */
   /* FIXME: hardcoded format */
-  gl->VertexAttribPointer (model->priv->draw_attr_position_loc, 3, GL_FLOAT,
+  gl->VertexAttribPointer (model->priv->model.position_loc, 3, GL_FLOAT,
       GL_FALSE, vinfo->strides[pos_idx], (void *) vinfo->offsets[pos_idx]);
-  gl->VertexAttribPointer (model->priv->draw_attr_texture0_loc, 2, GL_FLOAT,
-      GL_FALSE, vinfo->strides[tex_idx], (void *) vinfo->offsets[tex_idx]);
+  gl->EnableVertexAttribArray (model->priv->model.position_loc);
 
-  gl->EnableVertexAttribArray (model->priv->draw_attr_position_loc);
-  gl->EnableVertexAttribArray (model->priv->draw_attr_texture0_loc);
+  n = gst_3d_vertex_info_get_n_attributes_of_type (vinfo,
+      GST_3D_VERTEX_TYPE_TEXTURE);
+  for (i = 0; i < n; i++) {
+    int idx = gst_3d_vertex_info_find_attribute_nth_index (vinfo,
+        GST_3D_VERTEX_TYPE_TEXTURE, i);
+    Gst3DVertexAttribute *attrib = GST_3D_VERTEX_INFO_ATTRIBUTE (vinfo, idx);
+
+    gl->VertexAttribPointer (model->priv->model.uv_loc[i],
+        attrib->channels, _3d_vertex_format_to_gl_enum (attrib->finfo->format),
+        GL_FALSE, vinfo->strides[idx], (void *) vinfo->offsets[idx]);
+    gl->EnableVertexAttribArray (model->priv->model.uv_loc[i]);
+  }
 }
 
 static void
 _unbind_buffer (GstGLModelRender * model)
 {
   const GstGLFuncs *gl = GST_GL_BASE_FILTER (model)->context->gl_vtable;
+  int i, n;
 
   gl->BindBuffer (GL_ELEMENT_ARRAY_BUFFER, 0);
   gl->BindBuffer (GL_ARRAY_BUFFER, 0);
 
-  gl->DisableVertexAttribArray (model->priv->draw_attr_position_loc);
-  gl->DisableVertexAttribArray (model->priv->draw_attr_texture0_loc);
+  gl->DisableVertexAttribArray (model->priv->model.position_loc);
+  n = MAX_UV;
+  for (i = 0; i < n; i++) {
+    gl->DisableVertexAttribArray (model->priv->model.uv_loc[i]);
+  }
 }
 
 static gboolean
@@ -659,7 +806,7 @@ _update_vertex_buffer (GstGLModelRender * model, Gst3DModelMeta * meta,
   }
 
   if (gl->GenVertexArrays)
-    gl->BindVertexArray (model->priv->vao);
+    gl->BindVertexArray (model->priv->model.vao);
   _bind_buffer (model, &vmeta->info);
 
   gl->BufferData (GL_ARRAY_BUFFER, map_info.vertex_map.size,
@@ -671,8 +818,6 @@ _update_vertex_buffer (GstGLModelRender * model, Gst3DModelMeta * meta,
 
   return TRUE;
 }
-
-
 
 static GQuark
 _gl_memory_quark (void)
@@ -712,17 +857,18 @@ _create_upload_texture (GstGLModelRender * model, Gst3DMaterialTexture * tex)
     return (GstGLMemory *) gst_memory_ref (ret);
 
   GST_ERROR ("%p", gst_sample_get_buffer (tex->sample));
-  g_signal_emit_by_name (model->priv->model->src, "push-sample", tex->sample,
+  g_signal_emit_by_name (model->priv->parent->src, "push-sample", tex->sample,
       &flow_ret);
   GST_ERROR ("%p", gst_sample_get_buffer (tex->sample));
   if (flow_ret != GST_FLOW_OK)
     return NULL;
 
   GST_ERROR ("%p", gst_sample_get_buffer (tex->sample));
-  if (model->priv->model->pulled_preroll)
-    g_signal_emit_by_name (model->priv->model->sink, "pull-sample", &gl_sample);
+  if (model->priv->parent->pulled_preroll)
+    g_signal_emit_by_name (model->priv->parent->sink, "pull-sample",
+        &gl_sample);
   else
-    g_signal_emit_by_name (model->priv->model->sink, "pull-preroll",
+    g_signal_emit_by_name (model->priv->parent->sink, "pull-preroll",
         &gl_sample);
   GST_ERROR ("%p", gst_sample_get_buffer (tex->sample));
   if (!gl_sample)
@@ -746,33 +892,70 @@ _create_upload_texture (GstGLModelRender * model, Gst3DMaterialTexture * tex)
   return (GstGLMemory *) gst_memory_ref (ret);
 }
 
-static GstGLMemory *
+static gboolean
 _update_materials (GstGLModelRender * model, Gst3DModelMeta * meta)
 {
   GstGLContext *context = GST_GL_BASE_FILTER (model)->context;
   const GstGLFuncs *gl = context->gl_vtable;
   Gst3DMaterialMeta *mmeta;
   Gst3DMaterialStack *diffuse;
-  Gst3DMaterialTexture *tex;
-  GstBuffer *buf;
-  GstGLMemory *ret;
+  int i, n;
+  int gl_texture_count = 0;
+  gchar *name;
+  const gchar *base_name;
 
   mmeta = gst_buffer_get_3d_material_meta (meta->buffer, meta->material_id);
   diffuse =
       gst_3d_material_meta_get_stack (mmeta, GST_3D_MATERIAL_ELEMENT_DIFFUSE);
-  tex = gst_3d_material_stack_get_texture (diffuse, 0);
-  if (!tex)
-    return NULL;
-  buf = gst_sample_get_buffer (tex->sample);
-  ret = (GstGLMemory *) _get_cached_gl_memory (buf);
-  g_assert (ret);               /* no funny business now */
+  n = gst_3d_material_stack_get_n_textures (diffuse);
 
-  gl->ActiveTexture (GL_TEXTURE0);
-  gl->BindTexture (GL_TEXTURE_2D, gst_gl_memory_get_texture_id (ret));
+  base_name = "material.diffuse.";
 
-  gst_gl_shader_set_uniform_1i (model->shader, "tex0", 0);
+  name = g_strdup_printf ("%s.%s", base_name, "n_textures");
+  gst_gl_shader_set_uniform_1i (model->shader, name, n);
+  g_free (name);
 
-  return ret;
+  name = g_strdup_printf ("%s.%s", base_name, "base_color");
+  gst_gl_shader_set_uniform_3fv (model->shader, name, 1, &diffuse->x);
+  g_free (name);
+
+  for (i = 0; i < n; i++) {
+    Gst3DMaterialTexture *tex;
+    GstBuffer *buf;
+    GstGLMemory *ret;
+
+    tex = gst_3d_material_stack_get_texture (diffuse, 0);
+    if (!tex)
+      continue;
+    buf = gst_sample_get_buffer (tex->sample);
+    ret = (GstGLMemory *) _get_cached_gl_memory (buf);
+    if (!ret) {
+      _create_upload_texture (model, tex);
+      ret = (GstGLMemory *) _get_cached_gl_memory (buf);
+    }
+    g_assert (ret);             /* no funny business now */
+
+    gl->ActiveTexture (GL_TEXTURE0 + gl_texture_count++);
+    gl->BindTexture (GL_TEXTURE_2D, gst_gl_memory_get_texture_id (ret));
+
+    name = g_strdup_printf ("%s.tex[%u]", base_name, i);
+    gst_gl_shader_set_uniform_1i (model->shader, name, gl_texture_count);
+    g_free (name);
+
+    name = g_strdup_printf ("%s.%s[%d]", base_name, "uv_index", i);
+    gst_gl_shader_set_uniform_1i (model->shader, name, 0);      /* FIXME */
+    g_free (name);
+
+    name = g_strdup_printf ("%s.%s[%d]", base_name, "blend", i);
+    gst_gl_shader_set_uniform_1f (model->shader, name, 1.0);
+    g_free (name);
+
+    name = g_strdup_printf ("%s.%s[%d]", base_name, "op", i);
+    gst_gl_shader_set_uniform_1i (model->shader, name, OP_ADD);
+    g_free (name);
+  }
+
+  return TRUE;
 }
 
 static gboolean
@@ -781,6 +964,7 @@ _create_shader (GstGLModelRender * model)
   GstGLContext *context = GST_GL_BASE_FILTER (model)->context;
   GstGLSLStage *vert, *frag;
   GError *error = NULL;
+  int i;
 
   if (model->shader)
     return TRUE;
@@ -832,15 +1016,54 @@ _create_shader (GstGLModelRender * model)
   }
 
   gst_gl_shader_use (model->shader);
-  model->priv->draw_attr_position_loc =
+  model->priv->model.position_loc =
       gst_gl_shader_get_attribute_location (model->shader, "a_position");
-  model->priv->draw_attr_texture0_loc =
-      gst_gl_shader_get_attribute_location (model->shader, "a_texcoord0");
+
+  for (i = 0; i < MAX_UV; i++) {
+    gchar *name = g_strdup_printf ("uv[%u]", i);
+    model->priv->model.uv_loc[i] =
+        gst_gl_shader_get_attribute_location (model->shader, name);
+    g_free (name);
+  }
   gst_gl_context_clear_shader (context);
 
   return TRUE;
 }
 
+#if 0
+static void
+_set_shader_light_uniforms (GstGLShader * shader, int i, struct Light *light)
+{
+  gchar *light_base_str = g_strdup_printf ("lights[%u]", i);
+  gchar *name;
+
+  name = g_strdup_printf ("%s.%s", light_base_str, "position");
+  gst_gl_shader_set_uniform_4fv (shader, name, 1, &light->position.x);
+  g_free (name);
+
+  name = g_strdup_printf ("%s.%s", light_base_str, "color");
+  gst_gl_shader_set_uniform_3fv (shader, name, 1, &light->color.x);
+  g_free (name);
+
+  name = g_strdup_printf ("%s.%s", light_base_str, "attuention");
+  gst_gl_shader_set_uniform_1f (shader, name, light->attuention);
+  g_free (name);
+
+  name = g_strdup_printf ("%s.%s", light_base_str, "ambient_coefficient");
+  gst_gl_shader_set_uniform_1f (shader, name, light->ambient_coefficient);
+  g_free (name);
+
+  name = g_strdup_printf ("%s.%s", light_base_str, "cone_angle");
+  gst_gl_shader_set_uniform_1f (shader, name, light->cone_angle);
+  g_free (name);
+
+  name = g_strdup_printf ("%s.%s", light_base_str, "cone_direction");
+  gst_gl_shader_set_uniform_3fv (shader, name, 1, &light->cone_direction.x);
+  g_free (name);
+
+  g_free (light_base_str);
+}
+#endif
 static gboolean
 gst_gl_model_render_draw (gpointer data)
 {
@@ -857,18 +1080,6 @@ gst_gl_model_render_draw (gpointer data)
     return FALSE;
   gst_gl_shader_use (model->shader);
 
-  if (!model->priv->vbo) {
-    if (gl->GenVertexArrays) {
-      gl->GenVertexArrays (1, &model->priv->vao);
-    }
-
-    gl->GenBuffers (1, &model->priv->vbo);
-    gl->GenBuffers (1, &model->priv->vbo_indices);
-  }
-
-  if (gl->GenVertexArrays)
-    gl->BindVertexArray (model->priv->vao);
-
   gl->Enable (GL_DEPTH_TEST);
   gl->ClearColor (0.0, 0.0, 0.0, 0.0);
   gl->Clear (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -876,19 +1087,28 @@ gst_gl_model_render_draw (gpointer data)
   while ((meta = gst_buffer_iterate_meta (model->in_buffer, &state))) {
     if (meta->info->api == info->api) {
       Gst3DModelMeta *mmeta = (Gst3DModelMeta *) meta;
-      GstGLMemory *tex;
+
+      if (!model->priv->model.vbo) {
+        if (gl->GenVertexArrays) {
+          gl->GenVertexArrays (1, &model->priv->model.vao);
+        }
+
+        gl->GenBuffers (1, &model->priv->model.vbo);
+        gl->GenBuffers (1, &model->priv->model.vbo_indices);
+      }
+
+      if (gl->GenVertexArrays)
+        gl->BindVertexArray (model->priv->model.vao);
 
       /* XXX: terribly inefficient */
       if (!_update_vertex_buffer (model, mmeta, &n_indices, &vinfo))
         return FALSE;
       /* XXX: terribly inefficient */
-      if (!(tex = _update_materials (model, mmeta)))
+      if (!_update_materials (model, mmeta))
         return FALSE;
 
       /* FIXME: hardcoded index format */
       gl->DrawElements (GL_TRIANGLES, n_indices, GL_UNSIGNED_SHORT, 0);
-
-      gst_memory_unref ((GstMemory *) tex);
     }
   }
 
@@ -899,46 +1119,6 @@ gst_gl_model_render_draw (gpointer data)
   if (gl->GenVertexArrays)
     gl->BindVertexArray (0);
   _unbind_buffer (model);
-
-  return TRUE;
-}
-
-static GstGLMemory *
-_upload_material (GstGLModelRender * model, Gst3DModelMeta * meta)
-{
-  Gst3DMaterialMeta *mmeta;
-  Gst3DMaterialStack *diffuse;
-  Gst3DMaterialTexture *tex;
-  GstGLMemory *ret;
-
-  mmeta = gst_buffer_get_3d_material_meta (meta->buffer, meta->material_id);
-  diffuse =
-      gst_3d_material_meta_get_stack (mmeta, GST_3D_MATERIAL_ELEMENT_DIFFUSE);
-  if (!(tex = gst_3d_material_stack_get_texture (diffuse, 0)))
-    return NULL;
-
-  ret = _create_upload_texture (model, tex);
-
-  return ret;
-}
-
-static gboolean
-_upload_materials (GstGLModelRender * model)
-{
-  const GstMetaInfo *info = GST_3D_MODEL_META_INFO;
-  gpointer state = NULL;
-  GstMeta *meta;
-
-  while ((meta = gst_buffer_iterate_meta (model->in_buffer, &state))) {
-    if (meta->info->api == info->api) {
-      Gst3DModelMeta *mmeta = (Gst3DModelMeta *) meta;
-      GstGLMemory *tex;
-
-      /* XXX: terribly inefficient */
-      if (!(tex = _upload_material (model, mmeta)))
-        return FALSE;
-    }
-  }
 
   return TRUE;
 }
@@ -961,8 +1141,6 @@ gst_gl_model_render_transform (GstBaseTransform * btrans,
 
   model->in_buffer = inbuf;
   model->out_buffer = outbuf;
-
-  _upload_materials (model);
 
   gst_gl_context_thread_add (GST_GL_BASE_FILTER (model)->context,
       (GstGLContextThreadFunc) _process_model_gl, model);

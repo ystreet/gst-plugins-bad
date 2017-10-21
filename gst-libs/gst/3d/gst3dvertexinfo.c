@@ -636,3 +636,34 @@ gst_3d_vertex_info_find_attribute_index (Gst3DVertexInfo * info,
 
   return i;
 }
+
+int
+gst_3d_vertex_info_find_attribute_nth_index (Gst3DVertexInfo * info,
+    Gst3DVertexType type, int n)
+{
+  int i, count = 0;
+
+  for (i = 0; i < info->n_attribs; i++) {
+    if (type == info->attributes[i].type) {
+      count++;
+      if (count == i)
+        return i;
+    }
+  }
+
+  return -1;
+}
+
+int
+gst_3d_vertex_info_get_n_attributes_of_type (Gst3DVertexInfo * info,
+    Gst3DVertexType type)
+{
+  int i, count = 0;
+
+  for (i = 0; i < info->n_attribs; i++) {
+    if (type == info->attributes[i].type)
+      count++;
+  }
+
+  return count;
+}

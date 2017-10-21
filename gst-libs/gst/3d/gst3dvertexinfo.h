@@ -106,6 +106,9 @@ GstCaps *           gst_3d_vertex_info_to_caps              (const Gst3DVertexIn
 gsize               gst_3d_vertex_info_get_size             (Gst3DVertexInfo * info, gsize n_vertices);
 gsize               gst_3d_vertex_info_get_n_vertices       (Gst3DVertexInfo * info, gsize n_bytes);
 int                 gst_3d_vertex_info_find_attribute_index (Gst3DVertexInfo * info, Gst3DVertexType type, const gchar * custom_name);
+int                 gst_3d_vertex_info_find_attribute_nth_index (Gst3DVertexInfo * info, Gst3DVertexType type, int n);
+int                 gst_3d_vertex_info_get_n_attributes_of_type (Gst3DVertexInfo * info, Gst3DVertexType type);
+
 
 G_END_DECLS
 
