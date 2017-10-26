@@ -35,6 +35,7 @@ GST_DEBUG_CATEGORY_STATIC (GST_CAT_DEFAULT);
 #define BLOCKSIZE 1024 * 16
 
 static struct aiVector3D Zero3D = { 0.0, 0.0, 0.0 };
+static struct aiColor4D ZeroColor4D = { 0.0, 0.0, 0.0, 0.0 };
 
 struct sample_load;
 typedef void (*LinkDecodedPad) (struct sample_load * load, GstElement * decoder,
@@ -588,6 +589,11 @@ static GstStaticPadTemplate sink_templ = GST_STATIC_PAD_TEMPLATE ("sink",
     "format = (string) F32LE, "                                             \
     "type = (string) position , "                                           \
     "channels = (int) 3 "
+#define COLOR_ATTRIBUTE \
+    "attribute, "                                                           \
+    "format = (string) F32LE, "                                             \
+    "type = (string) color , "                                             \
+    "channels = (int) 4 "
 #define TEXCOORD_ATTRIBUTE \
     "attribute, "                                                           \
     "format = (string) F32LE, "                                             \
@@ -612,6 +618,11 @@ _create_vertices_pad_template_caps (void)
   g_value_init (&attrib_val, GST_TYPE_STRUCTURE);
 
   attrib = gst_structure_from_string (POSITION_ATTRIBUTE, NULL);
+  gst_value_set_structure (&attrib_val, attrib);
+  gst_structure_free (attrib);
+  gst_value_array_append_value (&attributes, &attrib_val);
+
+  attrib = gst_structure_from_string (COLOR_ATTRIBUTE, NULL);
   gst_value_set_structure (&attrib_val, attrib);
   gst_structure_free (attrib);
   gst_value_array_append_value (&attributes, &attrib_val);
@@ -738,7 +749,7 @@ gst_assimp_init (GstAssimp * ai, GstAssimpClass * klass)
   gst_element_add_pad (GST_ELEMENT (ai), ai->srcpad);
 
   ai->adapter = gst_adapter_new ();
-  gst_3d_vertex_info_init (&ai->out_vertex_info, 3);
+  gst_3d_vertex_info_init (&ai->out_vertex_info, 4);
   ai->out_vertex_info.primitive_mode = GST_3D_VERTEX_PRIMITIVE_MODE_TRIANGLES;
   ai->out_vertex_info.index_finfo =
       gst_3d_vertex_format_get_info (GST_3D_VERTEX_FORMAT_U16);
@@ -749,12 +760,16 @@ gst_assimp_init (GstAssimp * ai, GstAssimpClass * klass)
   ai->out_vertex_info.attributes[0].channels = 3;
   ai->out_vertex_info.attributes[1].finfo =
       gst_3d_vertex_format_get_info (GST_3D_VERTEX_FORMAT_F32);
-  ai->out_vertex_info.attributes[1].type = GST_3D_VERTEX_TYPE_NORMAL;
-  ai->out_vertex_info.attributes[1].channels = 3;
+  ai->out_vertex_info.attributes[1].type = GST_3D_VERTEX_TYPE_COLOR;
+  ai->out_vertex_info.attributes[1].channels = 4;
   ai->out_vertex_info.attributes[2].finfo =
       gst_3d_vertex_format_get_info (GST_3D_VERTEX_FORMAT_F32);
-  ai->out_vertex_info.attributes[2].type = GST_3D_VERTEX_TYPE_TEXTURE;
-  ai->out_vertex_info.attributes[2].channels = 2;
+  ai->out_vertex_info.attributes[2].type = GST_3D_VERTEX_TYPE_NORMAL;
+  ai->out_vertex_info.attributes[2].channels = 3;
+  ai->out_vertex_info.attributes[3].finfo =
+      gst_3d_vertex_format_get_info (GST_3D_VERTEX_FORMAT_F32);
+  ai->out_vertex_info.attributes[3].type = GST_3D_VERTEX_TYPE_TEXTURE;
+  ai->out_vertex_info.attributes[3].channels = 2;
   ai->out_vertex_info.offsets[0] = 0;
   ai->out_vertex_info.offsets[1] = ai->out_vertex_info.offsets[0] +
       ai->out_vertex_info.attributes[0].channels *
@@ -762,8 +777,12 @@ gst_assimp_init (GstAssimp * ai, GstAssimpClass * klass)
   ai->out_vertex_info.offsets[2] = ai->out_vertex_info.offsets[1] +
       ai->out_vertex_info.attributes[1].channels *
       ai->out_vertex_info.attributes[1].finfo->width / 8;
+  ai->out_vertex_info.offsets[3] = ai->out_vertex_info.offsets[2] +
+      ai->out_vertex_info.attributes[2].channels *
+      ai->out_vertex_info.attributes[2].finfo->width / 8;
   ai->out_vertex_info.strides[0] = ai->out_vertex_info.strides[1] =
-      ai->out_vertex_info.strides[2] = sizeof (struct GstAIVertex);
+      ai->out_vertex_info.strides[2] = ai->out_vertex_info.strides[3] =
+      sizeof (struct GstAIVertex);
   gst_3d_material_info_init (&ai->out_material_info);
 
   ai->null_sample = _create_null_sample (ai);
@@ -1594,12 +1613,28 @@ _init_scene (GstAssimp * ai, GstBuffer * input)
           sizeof (struct GstAIVertex) * j);
       const struct aiVector3D *pos = &(mesh->mVertices[j]);
       const struct aiVector3D *normal = &(mesh->mNormals[j]);
+      const struct aiColor4D *color;
       const struct aiVector3D *tex_coord;
       int k;
 
       node->px = pos->x;
       node->py = pos->y;
       node->pz = pos->z;
+
+      for (k = 0; k < AI_MAX_NUMBER_OF_COLOR_SETS; k++) {
+        color = &ZeroColor4D;
+        if (k >= 1 || !mesh->mColors[k]) {
+          break;
+        } else {
+          color = &(mesh->mColors[k][j]);
+        }
+
+        node->c.x = color->r;
+        node->c.y = color->g;
+        node->c.z = color->b;
+        node->c.w = color->a;
+      }
+
       node->nx = normal->x;
       node->ny = normal->y;
       node->nz = normal->z;
@@ -1853,9 +1888,9 @@ _gst_assimp_render_scene (GstAssimp * ai)
 
   GST_BUFFER_PTS (out_buffer) = ai->segment.position;
   GST_BUFFER_DTS (out_buffer) = GST_CLOCK_TIME_NONE;
-  GST_BUFFER_DURATION (out_buffer) = 1000 * GST_MSECOND;
+  GST_BUFFER_DURATION (out_buffer) = GST_SECOND;
 
-  ai->segment.position += GST_BUFFER_DURATION (out_buffer);
+  ai->segment.position += GST_SECOND;
 
   ret = gst_pad_push (ai->srcpad, out_buffer);
 

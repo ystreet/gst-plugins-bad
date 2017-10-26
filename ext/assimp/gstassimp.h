@@ -42,6 +42,11 @@ GType gst_assimp_get_type (void);
 typedef struct _GstAssimp GstAssimp;
 typedef struct _GstAssimpClass GstAssimpClass;
 
+struct Vec4F
+{
+  float x, y, z, w;
+};
+
 struct Vec3F
 {
   float x, y, z;
@@ -55,6 +60,7 @@ struct Vec2F
 struct GstAIVertex
 {
   float px, py, pz;
+  struct Vec4F c;
   float nx, ny, nz;
   struct Vec2F t[AI_MAX_NUMBER_OF_TEXTURECOORDS];
 };
