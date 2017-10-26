@@ -21,6 +21,7 @@
 #ifndef __GST_3D_H__
 #define __GST_3D_H__
 
+#include <gst/3d/gst3dcamera.h>
 #include <gst/3d/gst3dmaterialinfo.h>
 #include <gst/3d/gst3dmaterialmeta.h>
 #include <gst/3d/gst3dmodelmeta.h>

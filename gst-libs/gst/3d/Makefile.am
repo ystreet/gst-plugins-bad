@@ -10,7 +10,8 @@ libgst3d_@GST_API_VERSION@_la_SOURCES = \
 	gst3dvertexconverter.c \
 	gst3dvertexformat.c \
 	gst3dvertexinfo.c \
-	gst3dvertexmeta.c
+	gst3dvertexmeta.c \
+	gst3dcamera.c
 
 nodist_libgst3d_@GST_API_VERSION@_la_SOURCES = \
 	$(ORC_NODIST_SOURCES)
@@ -24,7 +25,8 @@ libgst3d_@GST_API_VERSION@include_HEADERS = \
 	gst3dvertexformat.h \
 	gst3dvertexinfo.h \
 	gst3dvertexmeta.h \
-	gst3dvertexpack.h
+	gst3dvertexpack.h \
+	gst3dcamera.h
 
 libgst3d_@GST_API_VERSION@_la_CFLAGS = \
 	-I$(top_srcdir)/gst-libs \
