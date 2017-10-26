@@ -60,6 +60,7 @@ struct _GstGLModelRender
   GstVideoInfo       vinfo;
 
   GstGLShader       *shader;
+  Gst3DCamera       *camera;
 
   /* <private> */
   GstBuffer         *out_buffer;
