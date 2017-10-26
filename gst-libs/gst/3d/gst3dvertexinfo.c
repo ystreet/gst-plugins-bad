@@ -51,6 +51,7 @@ static const struct
 } type_names[] = {
   {GST_3D_VERTEX_TYPE_CUSTOM, "custom"},
   {GST_3D_VERTEX_TYPE_POSITION, "position"},
+  {GST_3D_VERTEX_TYPE_COLOR, "color"},
   {GST_3D_VERTEX_TYPE_NORMAL, "normal"},
   {GST_3D_VERTEX_TYPE_TEXTURE, "texture"},
 };
@@ -645,9 +646,9 @@ gst_3d_vertex_info_find_attribute_nth_index (Gst3DVertexInfo * info,
 
   for (i = 0; i < info->n_attribs; i++) {
     if (type == info->attributes[i].type) {
-      count++;
-      if (count == i)
+      if (count == n)
         return i;
+      count++;
     }
   }
 
