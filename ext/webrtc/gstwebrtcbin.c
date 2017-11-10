@@ -207,8 +207,7 @@ gst_webrtc_bin_pad_new (const gchar * name, GstPadDirection direction)
 #define gst_webrtc_bin_parent_class parent_class
 G_DEFINE_TYPE_WITH_CODE (GstWebRTCBin, gst_webrtc_bin, GST_TYPE_BIN,
     GST_DEBUG_CATEGORY_INIT (gst_webrtc_bin_debug, "webrtcbin", 0,
-        "webrtcbin element");
-    );
+        "webrtcbin element"););
 
 static GstStaticPadTemplate sink_template = GST_STATIC_PAD_TEMPLATE ("sink_%u",
     GST_PAD_SINK,
@@ -600,9 +599,17 @@ out:
   return G_SOURCE_REMOVE;
 }
 
+static void
+_free_op (GstWebRTCBinTask * op)
+{
+  if (op->notify)
+    op->notify (op->data);
+  g_free (op);
+}
+
 void
 gst_webrtc_bin_enqueue_task (GstWebRTCBin * webrtc, GstWebRTCBinFunc func,
-    gpointer data)
+    gpointer data, GDestroyNotify notify)
 {
   GstWebRTCBinTask *op;
   GSource *source;
@@ -611,16 +618,20 @@ gst_webrtc_bin_enqueue_task (GstWebRTCBin * webrtc, GstWebRTCBinFunc func,
 
   if (webrtc->priv->is_closed) {
     GST_DEBUG_OBJECT (webrtc, "Peerconnection is closed, aborting execution");
+    if (notify)
+      notify (data);
     return;
   }
   op = g_new0 (GstWebRTCBinTask, 1);
   op->webrtc = webrtc;
   op->op = func;
   op->data = data;
+  op->notify = notify;
 
   source = g_idle_source_new ();
   g_source_set_priority (source, G_PRIORITY_DEFAULT);
-  g_source_set_callback (source, (GSourceFunc) _execute_op, op, g_free);
+  g_source_set_callback (source, (GSourceFunc) _execute_op, op,
+      (GDestroyNotify) _free_op);
   g_source_attach (source, webrtc->priv->main_context);
   g_source_unref (source);
 }
@@ -1088,7 +1099,8 @@ _update_ice_gathering_state_task (GstWebRTCBin * webrtc, gpointer data)
 static void
 _update_ice_gathering_state (GstWebRTCBin * webrtc)
 {
-  gst_webrtc_bin_enqueue_task (webrtc, _update_ice_gathering_state_task, NULL);
+  gst_webrtc_bin_enqueue_task (webrtc, _update_ice_gathering_state_task, NULL,
+      NULL);
 }
 
 static void
@@ -1122,7 +1134,8 @@ _update_ice_connection_state_task (GstWebRTCBin * webrtc, gpointer data)
 static void
 _update_ice_connection_state (GstWebRTCBin * webrtc)
 {
-  gst_webrtc_bin_enqueue_task (webrtc, _update_ice_connection_state_task, NULL);
+  gst_webrtc_bin_enqueue_task (webrtc, _update_ice_connection_state_task, NULL,
+      NULL);
 }
 
 static void
@@ -1157,7 +1170,7 @@ static void
 _update_peer_connection_state (GstWebRTCBin * webrtc)
 {
   gst_webrtc_bin_enqueue_task (webrtc, _update_peer_connection_state_task,
-      NULL);
+      NULL, NULL);
 }
 
 /* http://w3c.github.io/webrtc-pc/#dfn-check-if-negotiation-is-needed */
@@ -1301,7 +1314,8 @@ _update_need_negotiation (GstWebRTCBin * webrtc)
   webrtc->priv->need_negotiation = TRUE;
   /* Queue a task to check connection's [[ needNegotiation]] slot and, if still
    * true, fire a simple event named negotiationneeded at connection. */
-  gst_webrtc_bin_enqueue_task (webrtc, _check_need_negotiation_task, NULL);
+  gst_webrtc_bin_enqueue_task (webrtc, _check_need_negotiation_task, NULL,
+      NULL);
 }
 
 static GstCaps *
@@ -1989,11 +2003,17 @@ out:
   PC_UNLOCK (webrtc);
   gst_promise_reply (data->promise, s);
   PC_LOCK (webrtc);
-  gst_promise_unref (data->promise);
 
+  if (desc)
+    gst_webrtc_session_description_free (desc);
+}
+
+static void
+_free_create_sdp_data (struct create_sdp *data)
+{
   if (data->options)
     gst_structure_free (data->options);
-  gst_webrtc_session_description_free (desc);
+  gst_promise_unref (data->promise);
   g_free (data);
 }
 
@@ -2009,7 +2029,7 @@ gst_webrtc_bin_create_offer (GstWebRTCBin * webrtc,
   data->type = GST_WEBRTC_SDP_TYPE_OFFER;
 
   gst_webrtc_bin_enqueue_task (webrtc, (GstWebRTCBinFunc) _create_sdp_task,
-      data);
+      data, (GDestroyNotify) _free_create_sdp_data);
 }
 
 static void
@@ -2024,7 +2044,7 @@ gst_webrtc_bin_create_answer (GstWebRTCBin * webrtc,
   data->type = GST_WEBRTC_SDP_TYPE_ANSWER;
 
   gst_webrtc_bin_enqueue_task (webrtc, (GstWebRTCBinFunc) _create_sdp_task,
-      data);
+      data, (GDestroyNotify) _free_create_sdp_data);
 }
 
 typedef enum
@@ -3086,13 +3106,15 @@ _set_description_task (GstWebRTCBin * webrtc, struct set_description *sd)
         if (webrtc->pending_local_description)
           gst_webrtc_session_description_free
               (webrtc->pending_local_description);
-        webrtc->pending_local_description = sd->sdp;
+        webrtc->pending_local_description =
+            gst_webrtc_session_description_copy (sd->sdp);
         new_signaling_state = GST_WEBRTC_SIGNALING_STATE_HAVE_LOCAL_OFFER;
       } else {
         if (webrtc->pending_remote_description)
           gst_webrtc_session_description_free
               (webrtc->pending_remote_description);
-        webrtc->pending_remote_description = sd->sdp;
+        webrtc->pending_remote_description =
+            gst_webrtc_session_description_copy (sd->sdp);
         new_signaling_state = GST_WEBRTC_SIGNALING_STATE_HAVE_REMOTE_OFFER;
       }
       break;
@@ -3102,7 +3124,8 @@ _set_description_task (GstWebRTCBin * webrtc, struct set_description *sd)
         if (webrtc->current_local_description)
           gst_webrtc_session_description_free
               (webrtc->current_local_description);
-        webrtc->current_local_description = sd->sdp;
+        webrtc->current_local_description =
+            gst_webrtc_session_description_copy (sd->sdp);
 
         if (webrtc->current_remote_description)
           gst_webrtc_session_description_free
@@ -3113,7 +3136,8 @@ _set_description_task (GstWebRTCBin * webrtc, struct set_description *sd)
         if (webrtc->current_remote_description)
           gst_webrtc_session_description_free
               (webrtc->current_remote_description);
-        webrtc->current_remote_description = sd->sdp;
+        webrtc->current_remote_description =
+            gst_webrtc_session_description_copy (sd->sdp);
 
         if (webrtc->current_local_description)
           gst_webrtc_session_description_free
@@ -3157,14 +3181,16 @@ _set_description_task (GstWebRTCBin * webrtc, struct set_description *sd)
         if (webrtc->pending_local_description)
           gst_webrtc_session_description_free
               (webrtc->pending_local_description);
-        webrtc->pending_local_description = sd->sdp;
+        webrtc->pending_local_description =
+            gst_webrtc_session_description_copy (sd->sdp);
 
         new_signaling_state = GST_WEBRTC_SIGNALING_STATE_HAVE_LOCAL_PRANSWER;
       } else {
         if (webrtc->pending_remote_description)
           gst_webrtc_session_description_free
               (webrtc->pending_remote_description);
-        webrtc->pending_remote_description = sd->sdp;
+        webrtc->pending_remote_description =
+            gst_webrtc_session_description_copy (sd->sdp);
 
         new_signaling_state = GST_WEBRTC_SIGNALING_STATE_HAVE_REMOTE_PRANSWER;
       }
@@ -3285,12 +3311,18 @@ _set_description_task (GstWebRTCBin * webrtc, struct set_description *sd)
   }
 
 out:
-
   PC_UNLOCK (webrtc);
   gst_promise_reply (sd->promise, NULL);
   PC_LOCK (webrtc);
+}
+
+static void
+_free_set_description_data (struct set_description *sd)
+{
   if (sd->promise)
     gst_promise_unref (sd->promise);
+  if (sd->sdp)
+    gst_webrtc_session_description_free (sd->sdp);
   g_free (sd);
 }
 
@@ -3312,7 +3344,7 @@ gst_webrtc_bin_set_remote_description (GstWebRTCBin * webrtc,
   sd->sdp = gst_webrtc_session_description_copy (remote_sdp);
 
   gst_webrtc_bin_enqueue_task (webrtc, (GstWebRTCBinFunc) _set_description_task,
-      sd);
+      sd, (GDestroyNotify) _free_set_description_data);
 
   return;
 
@@ -3341,7 +3373,7 @@ gst_webrtc_bin_set_local_description (GstWebRTCBin * webrtc,
   sd->sdp = gst_webrtc_session_description_copy (local_sdp);
 
   gst_webrtc_bin_enqueue_task (webrtc, (GstWebRTCBinFunc) _set_description_task,
-      sd);
+      sd, (GDestroyNotify) _free_set_description_data);
 
   return;
 
@@ -3356,11 +3388,20 @@ static void
 _add_ice_candidate_task (GstWebRTCBin * webrtc, IceCandidateItem * item)
 {
   if (!webrtc->current_local_description || !webrtc->current_remote_description) {
-    g_array_append_val (webrtc->priv->pending_ice_candidates, item);
+    IceCandidateItem *new = g_new0 (IceCandidateItem, 1);
+    new->mlineindex = item->mlineindex;
+    new->candidate = g_strdup (item->candidate);
+
+    g_array_append_val (webrtc->priv->pending_ice_candidates, new);
   } else {
     _add_ice_candidate (webrtc, item);
-    _clear_ice_candidate_item (&item);
   }
+}
+
+static void
+_free_ice_candidate_item (IceCandidateItem * item)
+{
+  _clear_ice_candidate_item (&item);
 }
 
 static void
@@ -3376,7 +3417,8 @@ gst_webrtc_bin_add_ice_candidate (GstWebRTCBin * webrtc, guint mline,
   else if (!g_ascii_strncasecmp (attr, "candidate:", 10))
     item->candidate = g_strdup_printf ("a=%s", attr);
   gst_webrtc_bin_enqueue_task (webrtc,
-      (GstWebRTCBinFunc) _add_ice_candidate_task, item);
+      (GstWebRTCBinFunc) _add_ice_candidate_task, item,
+      (GDestroyNotify) _free_ice_candidate_item);
 }
 
 static void
@@ -3396,9 +3438,6 @@ _on_ice_candidate_task (GstWebRTCBin * webrtc, IceCandidateItem * item)
   g_signal_emit (webrtc, gst_webrtc_bin_signals[ON_ICE_CANDIDATE_SIGNAL],
       0, item->mlineindex, cand);
   PC_LOCK (webrtc);
-
-  g_free (item->candidate);
-  g_free (item);
 }
 
 static void
@@ -3411,7 +3450,8 @@ _on_ice_candidate (GstWebRTCICE * ice, guint mlineindex,
   item->candidate = g_strdup (candidate);
 
   gst_webrtc_bin_enqueue_task (webrtc,
-      (GstWebRTCBinFunc) _on_ice_candidate_task, item);
+      (GstWebRTCBinFunc) _on_ice_candidate_task, item,
+      (GDestroyNotify) _free_ice_candidate_item);
 }
 
 /* === rtpbin signal implementations === */
