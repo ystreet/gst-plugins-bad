@@ -29,6 +29,9 @@
 #include <gst/check/gstcheck.h>
 #include <gst/webrtc/webrtc.h>
 
+#define OPUS_RTP_CAPS(pt) "application/x-rtp,payload=" G_STRINGIFY(pt) ",encoding-name=OPUS,media=audio,clock-rate=48000"
+#define VP8_RTP_CAPS(pt) "application/x-rtp,payload=" G_STRINGIFY(pt) ",encoding-name=VP8,media=video,clock-rate=90000"
+
 typedef enum
 {
   STATE_NEW,
@@ -450,6 +453,7 @@ test_webrtc_wait_for_answer_error_eos (struct test_webrtc *t)
   g_mutex_unlock (&t->lock);
 }
 
+#if 0
 static void
 test_webrtc_wait_for_ice_gathering_complete (struct test_webrtc *t)
 {
@@ -466,7 +470,6 @@ test_webrtc_wait_for_ice_gathering_complete (struct test_webrtc *t)
   g_mutex_unlock (&t->lock);
 }
 
-#if 0
 static void
 test_webrtc_wait_for_ice_connection (struct test_webrtc *t,
     GstWebRTCICEConnectionState states)
@@ -540,7 +543,8 @@ GST_START_TEST (test_sdp_no_media)
 
 GST_END_TEST;
 
-GST_START_TEST (test_audio)
+static struct test_webrtc *
+create_audio_test (void)
 {
   struct test_webrtc *t = test_webrtc_new ();
   GstElement *src;
@@ -548,28 +552,37 @@ GST_START_TEST (test_audio)
   t->on_negotiation_needed = NULL;
   t->on_ice_candidate = NULL;
   t->on_pad_added = _pad_added_fakesink;
+
+  src =
+      gst_parse_bin_from_description ("fakesrc ! capsfilter caps="
+      OPUS_RTP_CAPS (96), TRUE, NULL);
+  fail_unless (src != NULL, "Could not create input pipeline");
+  fail_unless (gst_bin_add (GST_BIN (t->pipeline), src));
+  fail_unless (gst_element_link (src, t->webrtc1));
+
+  return t;
+}
+
+GST_START_TEST (test_audio)
+{
+  struct test_webrtc *t = create_audio_test ();
+
   t->offer_data = GUINT_TO_POINTER (1);
   t->on_offer_created = _count_num_sdp_media;
   t->answer_data = GUINT_TO_POINTER (1);
   t->on_answer_created = _count_num_sdp_media;
 
-  src = gst_parse_bin_from_description ("audiotestsrc ! opusenc ! "
-      "rtpopuspay ! capsfilter caps=application/x-rtp,payload=96,encoding-name=OPUS,media=audio",
-      TRUE, NULL);
-  fail_unless (src != NULL, "Could not create input pipeline");
-  fail_unless (gst_bin_add (GST_BIN (t->pipeline), src));
-  fail_unless (gst_element_link (src, t->webrtc1));
-
   test_webrtc_create_offer (t, t->webrtc1);
 
-  test_webrtc_wait_for_ice_gathering_complete (t);
-  fail_unless (t->state == STATE_ANSWER_CREATED);
+  test_webrtc_wait_for_answer_error_eos (t);
+  fail_unless_equals_int (STATE_ANSWER_CREATED, t->state);
   test_webrtc_free (t);
 }
 
 GST_END_TEST;
 
-GST_START_TEST (test_audio_video)
+static struct test_webrtc *
+create_audio_video_test (void)
 {
   struct test_webrtc *t = test_webrtc_new ();
   GstElement *src;
@@ -577,29 +590,37 @@ GST_START_TEST (test_audio_video)
   t->on_negotiation_needed = NULL;
   t->on_ice_candidate = NULL;
   t->on_pad_added = _pad_added_fakesink;
+
+  src =
+      gst_parse_bin_from_description ("fakesrc ! capsfilter caps="
+      OPUS_RTP_CAPS (96), TRUE, NULL);
+  fail_unless (src != NULL, "Could not create input pipeline");
+  fail_unless (gst_bin_add (GST_BIN (t->pipeline), src));
+  fail_unless (gst_element_link (src, t->webrtc1));
+
+  src =
+      gst_parse_bin_from_description ("fakesrc ! capsfilter caps="
+      VP8_RTP_CAPS (97), TRUE, NULL);
+  fail_unless (src != NULL, "Could not create input pipeline");
+  fail_unless (gst_bin_add (GST_BIN (t->pipeline), src));
+  fail_unless (gst_element_link (src, t->webrtc1));
+
+  return t;
+}
+
+GST_START_TEST (test_audio_video)
+{
+  struct test_webrtc *t = create_audio_video_test ();
+
   t->offer_data = GUINT_TO_POINTER (2);
   t->on_offer_created = _count_num_sdp_media;
   t->answer_data = GUINT_TO_POINTER (2);
   t->on_answer_created = _count_num_sdp_media;
 
-  src = gst_parse_bin_from_description ("audiotestsrc ! opusenc ! "
-      "rtpopuspay ! capsfilter caps=application/x-rtp,payload=96,encoding-name=OPUS,media=audio",
-      TRUE, NULL);
-  fail_unless (src != NULL, "Could not create input pipeline");
-  fail_unless (gst_bin_add (GST_BIN (t->pipeline), src));
-  fail_unless (gst_element_link (src, t->webrtc1));
-
-  src = gst_parse_bin_from_description ("videotestsrc ! vp8enc ! "
-      "rtpvp8pay ! capsfilter caps=application/x-rtp,payload=97,encoding-name=VP8,media=video",
-      TRUE, NULL);
-  fail_unless (src != NULL, "Could not create input pipeline");
-  fail_unless (gst_bin_add (GST_BIN (t->pipeline), src));
-  fail_unless (gst_element_link (src, t->webrtc1));
-
   test_webrtc_create_offer (t, t->webrtc1);
 
-  test_webrtc_wait_for_ice_gathering_complete (t);
-  fail_unless (t->state == STATE_ANSWER_CREATED);
+  test_webrtc_wait_for_answer_error_eos (t);
+  fail_unless_equals_int (STATE_ANSWER_CREATED, t->state);
   test_webrtc_free (t);
 }
 
@@ -627,7 +648,7 @@ GST_START_TEST (test_no_nice_elements_request_pad)
   fail_unless (pad == NULL);
 
   test_webrtc_wait_for_answer_error_eos (t);
-  fail_unless (t->state == STATE_ERROR);
+  fail_unless_equals_int (STATE_ERROR, t->state);
   test_webrtc_free (t);
 
   if (nicesrc)
@@ -659,7 +680,7 @@ GST_START_TEST (test_no_nice_elements_state_change)
       gst_element_set_state (t->pipeline, GST_STATE_READY));
 
   test_webrtc_wait_for_answer_error_eos (t);
-  fail_unless (t->state == STATE_ERROR);
+  fail_unless_equals_int (STATE_ERROR, t->state);
   test_webrtc_free (t);
 
   if (nicesrc)
