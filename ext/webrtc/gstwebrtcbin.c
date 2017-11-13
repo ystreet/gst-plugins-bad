@@ -3818,22 +3818,9 @@ gst_webrtc_bin_dispose (GObject * object)
     g_array_free (webrtc->priv->transceivers, TRUE);
   webrtc->priv->transceivers = NULL;
 
-  if (webrtc->priv->session_mid_map)
-    g_array_free (webrtc->priv->session_mid_map, TRUE);
-  webrtc->priv->session_mid_map = NULL;
-
   if (webrtc->priv->ice_stream_map)
     g_array_free (webrtc->priv->ice_stream_map, TRUE);
   webrtc->priv->ice_stream_map = NULL;
-
-  if (webrtc->priv->pending_ice_candidates)
-    g_array_free (webrtc->priv->pending_ice_candidates, TRUE);
-  webrtc->priv->pending_ice_candidates = NULL;
-
-  if (webrtc->priv->pending_pads)
-    g_list_free_full (webrtc->priv->pending_pads,
-        (GDestroyNotify) _free_pending_pad);
-  webrtc->priv->pending_pads = NULL;
 
   G_OBJECT_CLASS (parent_class)->dispose (object);
 }
@@ -3842,6 +3829,19 @@ static void
 gst_webrtc_bin_finalize (GObject * object)
 {
   GstWebRTCBin *webrtc = GST_WEBRTC_BIN (object);
+
+  if (webrtc->priv->pending_ice_candidates)
+    g_array_free (webrtc->priv->pending_ice_candidates, TRUE);
+  webrtc->priv->pending_ice_candidates = NULL;
+
+  if (webrtc->priv->session_mid_map)
+    g_array_free (webrtc->priv->session_mid_map, TRUE);
+  webrtc->priv->session_mid_map = NULL;
+
+  if (webrtc->priv->pending_pads)
+    g_list_free_full (webrtc->priv->pending_pads,
+        (GDestroyNotify) _free_pending_pad);
+  webrtc->priv->pending_pads = NULL;
 
   if (webrtc->current_local_description)
     gst_webrtc_session_description_free (webrtc->current_local_description);
