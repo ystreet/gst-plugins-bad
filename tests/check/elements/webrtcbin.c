@@ -626,6 +626,152 @@ GST_START_TEST (test_audio_video)
 
 GST_END_TEST;
 
+typedef void (*ValidateSDPFunc) (struct test_webrtc * t, GstElement * element,
+    GstWebRTCSessionDescription * desc, gpointer user_data);
+
+struct validate_sdp
+{
+  ValidateSDPFunc validate;
+  gpointer user_data;
+};
+
+static GstWebRTCSessionDescription *
+validate_sdp (struct test_webrtc *t, GstElement * element,
+    GstPromise * promise, gpointer user_data)
+{
+  struct validate_sdp *validate = user_data;
+  GstWebRTCSessionDescription *offer = NULL;
+  const gchar *field;
+
+  field = t->offerror == 1 && t->webrtc1 == element ? "offer" : "answer";
+
+  gst_structure_get (promise->promise, field,
+      GST_TYPE_WEBRTC_SESSION_DESCRIPTION, &offer, NULL);
+
+  validate->validate (t, element, offer, validate->user_data);
+
+  return offer;
+}
+
+static void
+on_sdp_media_direction (struct test_webrtc *t, GstElement * element,
+    GstWebRTCSessionDescription * desc, gpointer user_data)
+{
+  gchar **expected_directions = user_data;
+  int i;
+
+  for (i = 0; i < gst_sdp_message_medias_len (desc->sdp); i++) {
+    const GstSDPMedia *media = gst_sdp_message_get_media (desc->sdp, i);
+    gboolean have_direction = FALSE;
+    int j;
+
+    for (j = 0; j < gst_sdp_media_attributes_len (media); j++) {
+      const GstSDPAttribute *attr = gst_sdp_media_get_attribute (media, j);
+
+      if (g_strcmp0 (attr->key, "inactive") == 0) {
+        fail_unless (have_direction == FALSE,
+            "duplicate/multiple directions for media %u", j);
+        have_direction = TRUE;
+        fail_unless (g_strcmp0 (attr->key, expected_directions[i]) == 0);
+      } else if (g_strcmp0 (attr->key, "sendonly") == 0) {
+        fail_unless (have_direction == FALSE,
+            "duplicate/multiple directions for media %u", j);
+        have_direction = TRUE;
+        fail_unless (g_strcmp0 (attr->key, expected_directions[i]) == 0);
+      } else if (g_strcmp0 (attr->key, "recvonly") == 0) {
+        fail_unless (have_direction == FALSE,
+            "duplicate/multiple directions for media %u", j);
+        have_direction = TRUE;
+        fail_unless (g_strcmp0 (attr->key, expected_directions[i]) == 0);
+      } else if (g_strcmp0 (attr->key, "sendrecv") == 0) {
+        fail_unless (have_direction == FALSE,
+            "duplicate/multiple directions for media %u", j);
+        have_direction = TRUE;
+        fail_unless (g_strcmp0 (attr->key, expected_directions[i]) == 0);
+      }
+    }
+    fail_unless (have_direction, "no direction attribute in media %u", j);
+  }
+}
+
+GST_START_TEST (test_media_direction)
+{
+  struct test_webrtc *t = create_audio_video_test ();
+  const gchar *expected_offer[] = { "sendrecv", "sendrecv" };
+  const gchar *expected_answer[] = { "sendrecv", "recvonly" };
+  struct validate_sdp offer = { on_sdp_media_direction, expected_offer };
+  struct validate_sdp answer = { on_sdp_media_direction, expected_answer };
+  GstElement *src;
+
+  src =
+      gst_parse_bin_from_description ("fakesrc ! capsfilter caps="
+      OPUS_RTP_CAPS (96), TRUE, NULL);
+  fail_unless (src != NULL, "Could not create input pipeline");
+  fail_unless (gst_bin_add (GST_BIN (t->pipeline), src));
+  fail_unless (gst_element_link (src, t->webrtc2));
+
+  t->offer_data = &offer;
+  t->on_offer_created = validate_sdp;
+  t->answer_data = &answer;
+  t->on_answer_created = validate_sdp;
+
+  test_webrtc_create_offer (t, t->webrtc1);
+
+  test_webrtc_wait_for_answer_error_eos (t);
+  fail_unless_equals_int (STATE_ANSWER_CREATED, t->state);
+  test_webrtc_free (t);
+}
+
+GST_END_TEST;
+
+static void
+on_sdp_media_setup (struct test_webrtc *t, GstElement * element,
+    GstWebRTCSessionDescription * desc, gpointer user_data)
+{
+  gchar **expected_setup = user_data;
+  int i;
+
+  for (i = 0; i < gst_sdp_message_medias_len (desc->sdp); i++) {
+    const GstSDPMedia *media = gst_sdp_message_get_media (desc->sdp, i);
+    gboolean have_setup = FALSE;
+    int j;
+
+    for (j = 0; j < gst_sdp_media_attributes_len (media); j++) {
+      const GstSDPAttribute *attr = gst_sdp_media_get_attribute (media, j);
+
+      if (g_strcmp0 (attr->key, "setup") == 0) {
+        fail_unless (have_setup == FALSE,
+            "duplicate/multiple setup for media %u", j);
+        have_setup = TRUE;
+        fail_unless (g_strcmp0 (attr->value, expected_setup[i]) == 0);
+      }
+    }
+    fail_unless (have_setup, "no setup attribute in media %u", j);
+  }
+}
+
+GST_START_TEST (test_media_setup)
+{
+  struct test_webrtc *t = create_audio_test ();
+  const gchar *expected_offer[] = { "actpass" };
+  const gchar *expected_answer[] = { "active" };
+  struct validate_sdp offer = { on_sdp_media_setup, expected_offer };
+  struct validate_sdp answer = { on_sdp_media_setup, expected_answer };
+
+  t->offer_data = &offer;
+  t->on_offer_created = validate_sdp;
+  t->answer_data = &answer;
+  t->on_answer_created = validate_sdp;
+
+  test_webrtc_create_offer (t, t->webrtc1);
+
+  test_webrtc_wait_for_answer_error_eos (t);
+  fail_unless_equals_int (STATE_ANSWER_CREATED, t->state);
+  test_webrtc_free (t);
+}
+
+GST_END_TEST;
+
 GST_START_TEST (test_no_nice_elements_request_pad)
 {
   struct test_webrtc *t = test_webrtc_new ();
@@ -709,6 +855,8 @@ webrtcbin_suite (void)
   if (nicesrc && nicesink) {
     tcase_add_test (tc, test_audio);
     tcase_add_test (tc, test_audio_video);
+    tcase_add_test (tc, test_media_direction);
+    tcase_add_test (tc, test_media_setup);
   }
 
   if (nicesrc)
