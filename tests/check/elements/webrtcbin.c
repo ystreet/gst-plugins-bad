@@ -105,24 +105,25 @@ _on_answer_received (GstPromise * promise, gpointer user_data)
   GstWebRTCSessionDescription *answer = NULL;
   gchar *desc;
 
+  gst_structure_get (promise->promise, "answer",
+      GST_TYPE_WEBRTC_SESSION_DESCRIPTION, &answer, NULL);
+  desc = gst_sdp_message_as_text (answer->sdp);
+  GST_INFO ("Created Answer: %s", desc);
+  g_free (desc);
+
   g_mutex_lock (&t->lock);
   if (t->on_offer_created) {
+    gst_webrtc_session_description_free (answer);
     answer = t->on_answer_created (t, answerer, promise, t->answer_data);
-  } else {
-    gst_structure_get (promise->promise, "answer",
-        GST_TYPE_WEBRTC_SESSION_DESCRIPTION, &answer, NULL);
   }
   gst_promise_unref (promise);
-  desc = gst_sdp_message_as_text (answer->sdp);
-  GST_LOG ("Created Answer: %s", desc);
-  g_free (desc);
+
+  g_signal_emit_by_name (answerer, "set-local-description", answer, NULL);
+  g_signal_emit_by_name (offeror, "set-remote-description", answer, NULL);
 
   t->state = STATE_ANSWER_CREATED;
   g_cond_broadcast (&t->cond);
   g_mutex_unlock (&t->lock);
-
-  g_signal_emit_by_name (answerer, "set-local-description", answer, NULL);
-  g_signal_emit_by_name (offeror, "set-remote-description", answer, NULL);
 
   gst_webrtc_session_description_free (answer);
 }
@@ -136,21 +137,18 @@ _on_offer_received (GstPromise * promise, gpointer user_data)
   GstWebRTCSessionDescription *offer = NULL;
   gchar *desc;
 
-  g_mutex_lock (&t->lock);
-  if (t->on_offer_created) {
-    offer = t->on_offer_created (t, offeror, promise, t->offer_data);
-  } else {
-    gst_structure_get (promise->promise, "offer",
-        GST_TYPE_WEBRTC_SESSION_DESCRIPTION, &offer, NULL);
-  }
-  gst_promise_unref (promise);
+  gst_structure_get (promise->promise, "offer",
+      GST_TYPE_WEBRTC_SESSION_DESCRIPTION, &offer, NULL);
   desc = gst_sdp_message_as_text (offer->sdp);
-  GST_LOG ("Created offer: %s", desc);
+  GST_INFO ("Created offer: %s", desc);
   g_free (desc);
 
-  t->state = STATE_OFFER_CREATED;
-  g_cond_broadcast (&t->cond);
-  g_mutex_unlock (&t->lock);
+  g_mutex_lock (&t->lock);
+  if (t->on_offer_created) {
+    gst_webrtc_session_description_free (offer);
+    offer = t->on_offer_created (t, offeror, promise, t->offer_data);
+  }
+  gst_promise_unref (promise);
 
   g_signal_emit_by_name (offeror, "set-local-description", offer, NULL);
   g_signal_emit_by_name (answerer, "set-remote-description", offer, NULL);
@@ -159,12 +157,17 @@ _on_offer_received (GstPromise * promise, gpointer user_data)
   gst_promise_set_change_callback (promise, _on_answer_received, t, NULL);
   g_signal_emit_by_name (answerer, "create-answer", NULL, promise);
 
+  t->state = STATE_OFFER_CREATED;
+  g_cond_broadcast (&t->cond);
+  g_mutex_unlock (&t->lock);
+
   gst_webrtc_session_description_free (offer);
 }
 
 static gboolean
 _bus_watch (GstBus * bus, GstMessage * msg, struct test_webrtc *t)
 {
+  g_mutex_lock (&t->lock);
   switch (GST_MESSAGE_TYPE (msg)) {
     case GST_MESSAGE_STATE_CHANGED:
       if (GST_ELEMENT (msg->src) == t->pipeline) {
@@ -195,20 +198,16 @@ _bus_watch (GstBus * bus, GstMessage * msg, struct test_webrtc *t)
       GST_WARNING ("Debugging info: %s\n", (dbg_info) ? dbg_info : "none");
       g_error_free (err);
       g_free (dbg_info);
-      g_mutex_lock (&t->lock);
       t->state = STATE_ERROR;
       g_cond_broadcast (&t->cond);
-      g_mutex_unlock (&t->lock);
       break;
     }
     case GST_MESSAGE_EOS:{
       GST_DEBUG_BIN_TO_DOT_FILE_WITH_TS (GST_BIN (t->pipeline),
           GST_DEBUG_GRAPH_SHOW_ALL, "eos");
       GST_INFO ("EOS received\n");
-      g_mutex_lock (&t->lock);
       t->state = STATE_EOS;
       g_cond_broadcast (&t->cond);
-      g_mutex_unlock (&t->lock);
       break;
     }
     default:
@@ -217,6 +216,7 @@ _bus_watch (GstBus * bus, GstMessage * msg, struct test_webrtc *t)
 
   if (t->bus_message)
     t->bus_message (t, bus, msg, t->bus_data);
+  g_mutex_unlock (&t->lock);
 
   return TRUE;
 }
@@ -237,15 +237,17 @@ static void
 _on_ice_candidate (GstElement * webrtc, guint mlineindex, gchar * candidate,
     struct test_webrtc *t)
 {
-  GstElement *other = webrtc == t->webrtc1 ? t->webrtc2 : t->webrtc1;
+  GstElement *other;
 
   g_mutex_lock (&t->lock);
+  other = webrtc == t->webrtc1 ? t->webrtc2 : t->webrtc1;
+
   if (t->on_ice_candidate)
     t->on_ice_candidate (t, webrtc, mlineindex, candidate, other,
         t->ice_candidate_data);
-  g_mutex_unlock (&t->lock);
 
   g_signal_emit_by_name (other, "add-ice-candidate", mlineindex, candidate);
+  g_mutex_unlock (&t->lock);
 }
 
 static void
@@ -394,7 +396,10 @@ test_webrtc_free (struct test_webrtc *t)
 {
   gst_element_set_state (t->pipeline, GST_STATE_NULL);
 
-  gst_object_unref (t->pipeline);
+  /* Otherwise while one webrtcbin is being destroyed, the other could
+   * generate a signal that calls into the destroyed webrtcbin */
+  g_signal_handlers_disconnect_by_data (t->webrtc1, t);
+  g_signal_handlers_disconnect_by_data (t->webrtc2, t);
 
   g_main_loop_quit (t->loop);
   g_mutex_lock (&t->lock);
@@ -403,6 +408,8 @@ test_webrtc_free (struct test_webrtc *t)
   g_mutex_unlock (&t->lock);
 
   g_thread_join (t->thread);
+
+  gst_object_unref (t->pipeline);
 
   if (t->data_notify)
     t->data_notify (t->user_data);
