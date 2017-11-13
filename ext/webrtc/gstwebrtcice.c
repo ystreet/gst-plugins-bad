@@ -796,9 +796,9 @@ gst_webrtc_ice_finalize (GObject * object)
 {
   GstWebRTCICE *ice = GST_WEBRTC_ICE (object);
 
-  _stop_thread (ice);
-
   g_signal_handlers_disconnect_by_data (ice->priv->nice_agent, ice);
+
+  _stop_thread (ice);
 
   if (ice->turn_server)
     gst_uri_unref (ice->turn_server);
