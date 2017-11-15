@@ -216,7 +216,7 @@ static GstStaticPadTemplate sink_template = GST_STATIC_PAD_TEMPLATE ("sink_%u",
     GST_STATIC_CAPS ("application/x-rtp"));
 
 static GstStaticPadTemplate src_template = GST_STATIC_PAD_TEMPLATE ("src_%u",
-    GST_PAD_SINK,
+    GST_PAD_SRC,
     GST_PAD_SOMETIMES,
     GST_STATIC_CAPS ("application/x-rtp"));
 
@@ -923,7 +923,7 @@ _collate_ice_gathering_states (GstWebRTCBin * webrtc)
     rtcp_transport = stream->rtcp_transport->transport;
 
     if (!rtcp_mux && rtcp_transport && rtcp_transport != transport) {
-      g_object_get (transport, "gathering-state", &ice_state, NULL);
+      g_object_get (rtcp_transport, "gathering-state", &ice_state, NULL);
       any_state |= (1 << ice_state);
       if (ice_state != STATE (COMPLETE))
         all_completed = FALSE;
