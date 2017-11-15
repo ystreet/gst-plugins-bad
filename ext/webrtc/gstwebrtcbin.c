@@ -916,7 +916,7 @@ _collate_ice_gathering_states (GstWebRTCBin * webrtc)
     rtcp_transport = stream->rtcp_transport->transport;
 
     if (!rtcp_mux && rtcp_transport && rtcp_transport != transport) {
-      g_object_get (transport, "gathering-state", &ice_state, NULL);
+      g_object_get (rtcp_transport, "gathering-state", &ice_state, NULL);
       any_state |= (1 << ice_state);
       if (ice_state != STATE (COMPLETE))
         all_completed = FALSE;
