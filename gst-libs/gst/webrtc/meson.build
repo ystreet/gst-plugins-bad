@@ -40,6 +40,8 @@ gstwebrtc_c = custom_target('gstwebrtcenum_c',
   command : [mkenums, glib_mkenums, '@OUTPUT@', '@INPUT@'])
 webrtc_gen_sources = [gstwebrtc_h]
 
+gstwebrtc_dependencies = [gstbase_dep, gstpbutils_dep, gstsdp_dep]
+
 gstwebrtc = library('gstwebrtc-' + api_version,
   webrtc_sources, gstwebrtc_c, gstwebrtc_h,
   c_args : gst_plugins_bad_args,
@@ -47,10 +49,11 @@ gstwebrtc = library('gstwebrtc-' + api_version,
   version : libversion,
   soversion : soversion,
   install : true,
-  dependencies : [gstbase_dep, gstpbutils_dep, gstsdp_dep],
+  dependencies : gstwebrtc_dependencies,
 )
 
 install_headers(webrtc_headers, subdir : 'gstreamer-1.0/gst/webrtc')
 
 gstwebrtc_dep = declare_dependency(link_with: gstwebrtc,
-  include_directories : libsinc)
+  include_directories : libsinc,
+  dependencies: gstwebrtc_dependencies)
