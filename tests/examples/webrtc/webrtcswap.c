@@ -101,24 +101,20 @@ static void
 _on_answer_received (GstPromise * promise, gpointer user_data)
 {
   GstWebRTCSessionDescription *answer = NULL;
+  const GstStructure *reply;
   gchar *desc;
 
-  g_assert (promise->result == GST_PROMISE_RESULT_REPLIED);
-  gst_structure_get (promise->promise, "answer",
+  g_assert (gst_promise_wait (promise) == GST_PROMISE_RESULT_REPLIED);
+  reply = gst_promise_get_reply (promise);
+  gst_structure_get (reply, "answer",
       GST_TYPE_WEBRTC_SESSION_DESCRIPTION, &answer, NULL);
   gst_promise_unref (promise);
   desc = gst_sdp_message_as_text (answer->sdp);
   g_print ("Created answer:\n%s\n", desc);
   g_free (desc);
 
-  promise = gst_promise_new ();
-  g_signal_emit_by_name (webrtc1, "set-remote-description", answer, promise);
-  gst_promise_interrupt (promise);
-  gst_promise_unref (promise);
-  promise = gst_promise_new ();
-  g_signal_emit_by_name (webrtc2, "set-local-description", answer, promise);
-  gst_promise_interrupt (promise);
-  gst_promise_unref (promise);
+  g_signal_emit_by_name (webrtc1, "set-remote-description", answer, NULL);
+  g_signal_emit_by_name (webrtc2, "set-local-description", answer, NULL);
 
   gst_webrtc_session_description_free (answer);
 }
@@ -127,27 +123,22 @@ static void
 _on_offer_received (GstPromise * promise, gpointer user_data)
 {
   GstWebRTCSessionDescription *offer = NULL;
+  const GstStructure *reply;
   gchar *desc;
 
-  g_assert (promise->result == GST_PROMISE_RESULT_REPLIED);
-  gst_structure_get (promise->promise, "offer",
+  g_assert (gst_promise_wait (promise) == GST_PROMISE_RESULT_REPLIED);
+  reply = gst_promise_get_reply (promise);
+  gst_structure_get (reply, "offer",
       GST_TYPE_WEBRTC_SESSION_DESCRIPTION, &offer, NULL);
   gst_promise_unref (promise);
   desc = gst_sdp_message_as_text (offer->sdp);
   g_print ("Created offer:\n%s\n", desc);
   g_free (desc);
 
-  promise = gst_promise_new ();
-  g_signal_emit_by_name (webrtc1, "set-local-description", offer, promise);
-  gst_promise_interrupt (promise);
-  gst_promise_unref (promise);
-  promise = gst_promise_new ();
-  g_signal_emit_by_name (webrtc2, "set-remote-description", offer, promise);
-  gst_promise_interrupt (promise);
-  gst_promise_unref (promise);
+  g_signal_emit_by_name (webrtc1, "set-local-description", offer, NULL);
+  g_signal_emit_by_name (webrtc2, "set-remote-description", offer, NULL);
 
-  promise = gst_promise_new ();
-  gst_promise_set_change_callback (promise, _on_answer_received, user_data,
+  promise = gst_promise_new_with_change_func (_on_answer_received, user_data,
       NULL);
   g_signal_emit_by_name (webrtc2, "create-answer", NULL, promise);
 
@@ -157,9 +148,9 @@ _on_offer_received (GstPromise * promise, gpointer user_data)
 static void
 _on_negotiation_needed (GstElement * element, gpointer user_data)
 {
-  GstPromise *promise = gst_promise_new ();
+  GstPromise *promise;
 
-  gst_promise_set_change_callback (promise, _on_offer_received, user_data,
+  promise = gst_promise_new_with_change_func (_on_offer_received, user_data,
       NULL);
   g_signal_emit_by_name (webrtc1, "create-offer", NULL, promise);
 }
