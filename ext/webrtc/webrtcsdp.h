@@ -76,5 +76,7 @@ G_GNUC_INTERNAL
 gboolean                            _media_has_attribute_key                (const GstSDPMedia * media,
                                                                              const gchar * key);
 
+G_GNUC_INTERNAL
+int                                 _get_sctp_port_from_media               (const GstSDPMedia * media);
 
 #endif /* __WEBRTC_UTILS_H__ */

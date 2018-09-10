@@ -30,6 +30,13 @@
 #include <gst/check/gstharness.h>
 #include <gst/webrtc/webrtc.h>
 
+/* most of these 'failing' tests are due to issues in the containing elements
+ * like dtls and sctp but also dependant libraries like libgupnp/libnice
+ * either containing races or throwing/dumping warnings/criticals.
+ * They are still semi-useful as explanatory code examples and allow some
+ * issues to be spotted so are left in */
+#define ENABLE_FAILING_TESTS 0
+
 #define OPUS_RTP_CAPS(pt) "application/x-rtp,payload=" G_STRINGIFY(pt) ",encoding-name=OPUS,media=audio,clock-rate=48000,ssrc=(uint)3384078950"
 #define VP8_RTP_CAPS(pt) "application/x-rtp,payload=" G_STRINGIFY(pt) ",encoding-name=VP8,media=video,clock-rate=90000,ssrc=(uint)3484078950"
 
@@ -85,6 +92,12 @@ struct test_webrtc
   GstWebRTCSessionDescription * (*on_answer_created)    (struct test_webrtc * t,
                                                          GstElement * element,
                                                          GstPromise * promise,
+                                                         gpointer user_data);
+  gpointer data_channel_data;
+  GDestroyNotify data_channel_notify;
+  void       (*on_data_channel)                         (struct test_webrtc * t,
+                                                         GstElement * element,
+                                                         GObject *data_channel,
                                                          gpointer user_data);
   gpointer answer_data;
   GDestroyNotify answer_notify;
@@ -291,6 +304,16 @@ _on_pad_added (GstElement * webrtc, GstPad * new_pad, struct test_webrtc *t)
 }
 
 static void
+_on_data_channel (GstElement * webrtc, GObject * data_channel,
+    struct test_webrtc *t)
+{
+  g_mutex_lock (&t->lock);
+  if (t->on_data_channel)
+    t->on_data_channel (t, webrtc, data_channel, t->data_channel_data);
+  g_mutex_unlock (&t->lock);
+}
+
+static void
 _pad_added_not_reached (struct test_webrtc *t, GstElement * element,
     GstPad * pad, gpointer user_data)
 {
@@ -328,6 +351,13 @@ _bus_no_errors (struct test_webrtc *t, GstBus * bus, GstMessage * msg,
 static GstWebRTCSessionDescription *
 _offer_answer_not_reached (struct test_webrtc *t, GstElement * element,
     GstPromise * promise, gpointer user_data)
+{
+  g_assert_not_reached ();
+}
+
+static void
+_on_data_channel_not_reached (struct test_webrtc *t, GstElement * element,
+    GObject * data_channel, gpointer user_data)
 {
   g_assert_not_reached ();
 }
@@ -387,6 +417,7 @@ test_webrtc_new (void)
   ret->on_pad_added = _pad_added_not_reached;
   ret->on_offer_created = _offer_answer_not_reached;
   ret->on_answer_created = _offer_answer_not_reached;
+  ret->on_data_channel = _on_data_channel_not_reached;
   ret->bus_message = _bus_no_errors;
 
   g_mutex_init (&ret->lock);
@@ -415,6 +446,10 @@ test_webrtc_new (void)
       G_CALLBACK (_on_ice_candidate), ret);
   g_signal_connect (ret->webrtc2, "on-ice-candidate",
       G_CALLBACK (_on_ice_candidate), ret);
+  g_signal_connect (ret->webrtc1, "on-data-channel",
+      G_CALLBACK (_on_data_channel), ret);
+  g_signal_connect (ret->webrtc2, "on-data-channel",
+      G_CALLBACK (_on_data_channel), ret);
   g_signal_connect (ret->webrtc1, "pad-added", G_CALLBACK (_on_pad_added), ret);
   g_signal_connect (ret->webrtc2, "pad-added", G_CALLBACK (_on_pad_added), ret);
   g_signal_connect_swapped (ret->webrtc1, "notify::ice-gathering-state",
@@ -475,6 +510,8 @@ test_webrtc_free (struct test_webrtc *t)
     t->answer_notify (t->answer_data);
   if (t->pad_added_notify)
     t->pad_added_notify (t->pad_added_data);
+  if (t->data_channel_notify)
+    t->data_channel_notify (t->data_channel_data);
 
   fail_unless_equals_int (GST_STATE_CHANGE_SUCCESS,
       gst_element_set_state (t->webrtc1, GST_STATE_NULL));
@@ -523,11 +560,17 @@ test_webrtc_wait_for_answer_error_eos (struct test_webrtc *t)
 }
 
 static void
+test_webrtc_signal_state_unlocked (struct test_webrtc *t, TestState state)
+{
+  t->state = state;
+  g_cond_broadcast (&t->cond);
+}
+
+static void
 test_webrtc_signal_state (struct test_webrtc *t, TestState state)
 {
   g_mutex_lock (&t->lock);
-  t->state = state;
-  g_cond_broadcast (&t->cond);
+  test_webrtc_signal_state_unlocked (t, state);
   g_mutex_unlock (&t->lock);
 }
 
@@ -1403,6 +1446,190 @@ GST_START_TEST (test_recvonly_sendonly)
 
 GST_END_TEST;
 
+static gboolean
+_message_media_is_datachannel (const GstSDPMessage * msg, guint media_id)
+{
+  const GstSDPMedia *media;
+
+  if (!msg)
+    return FALSE;
+
+  if (gst_sdp_message_medias_len (msg) <= media_id)
+    return FALSE;
+
+  media = gst_sdp_message_get_media (msg, media_id);
+
+  if (g_strcmp0 (gst_sdp_media_get_media (media), "application") != 0)
+    return FALSE;
+
+  if (gst_sdp_media_formats_len (media) != 1)
+    return FALSE;
+
+  if (g_strcmp0 (gst_sdp_media_get_format (media, 0),
+          "webrtc-datachannel") != 0)
+    return FALSE;
+
+  return TRUE;
+}
+
+static void
+on_sdp_has_datachannel (struct test_webrtc *t, GstElement * element,
+    GstWebRTCSessionDescription * desc, gpointer user_data)
+{
+  gboolean have_data_channel = FALSE;
+  int i;
+
+  for (i = 0; i < gst_sdp_message_medias_len (desc->sdp); i++) {
+    if (_message_media_is_datachannel (desc->sdp, i)) {
+      /* there should only be one data channel m= section */
+      fail_unless_equals_int (FALSE, have_data_channel);
+      have_data_channel = TRUE;
+    }
+  }
+
+  fail_unless_equals_int (TRUE, have_data_channel);
+}
+
+GST_START_TEST (test_data_channel_create)
+{
+  struct test_webrtc *t = test_webrtc_new ();
+  GObject *channel = NULL;
+  struct validate_sdp offer = { on_sdp_has_datachannel, NULL };
+  struct validate_sdp answer = { on_sdp_has_datachannel, NULL };
+  gchar *label;
+
+  t->on_negotiation_needed = NULL;
+  t->offer_data = &offer;
+  t->on_offer_created = validate_sdp;
+  t->answer_data = &answer;
+  t->on_answer_created = validate_sdp;
+  t->on_ice_candidate = NULL;
+
+  g_signal_emit_by_name (t->webrtc1, "create-data-channel", "label", NULL,
+      &channel);
+  g_assert_nonnull (channel);
+  g_object_get (channel, "label", &label, NULL);
+  g_assert_cmpstr (label, ==, "label");
+
+  test_webrtc_create_offer (t, t->webrtc1);
+
+  test_webrtc_wait_for_answer_error_eos (t);
+  fail_unless_equals_int (STATE_ANSWER_CREATED, t->state);
+  test_webrtc_free (t);
+}
+
+GST_END_TEST;
+#if ENABLE_FAILING_TESTS
+static void
+have_data_channel (struct test_webrtc *t, GstElement * element,
+    GObject * our, gpointer user_data)
+{
+  GObject *other = user_data;
+  gchar *our_label, *other_label;
+
+  g_object_get (our, "label", &our_label, NULL);
+  g_object_get (other, "label", &other_label, NULL);
+
+  g_assert_cmpstr (our_label, ==, other_label);
+
+  g_free (our_label);
+  g_free (other_label);
+
+  test_webrtc_signal_state_unlocked (t, STATE_CUSTOM);
+}
+
+GST_START_TEST (test_data_channel_remote_notify)
+{
+  struct test_webrtc *t = test_webrtc_new ();
+  GObject *channel = NULL;
+  struct validate_sdp offer = { on_sdp_has_datachannel, NULL };
+  struct validate_sdp answer = { on_sdp_has_datachannel, NULL };
+
+  t->on_negotiation_needed = NULL;
+  t->offer_data = &offer;
+  t->on_offer_created = validate_sdp;
+  t->answer_data = &answer;
+  t->on_answer_created = validate_sdp;
+  t->on_ice_candidate = NULL;
+  t->on_data_channel = have_data_channel;
+
+  g_signal_emit_by_name (t->webrtc1, "create-data-channel", "label", NULL,
+      &channel);
+  g_assert_nonnull (channel);
+  t->data_channel_data = channel;
+
+  gst_element_set_state (t->webrtc1, GST_STATE_PLAYING);
+  gst_element_set_state (t->webrtc2, GST_STATE_PLAYING);
+
+  test_webrtc_create_offer (t, t->webrtc1);
+
+  test_webrtc_wait_for_state_mask (t, 1 << STATE_CUSTOM);
+
+  g_object_unref (channel);
+  test_webrtc_free (t);
+}
+
+GST_END_TEST;
+
+static const gchar *test_string = "GStreamer WebRTC is awesome!";
+
+static void
+on_message_string (GObject * channel, const gchar * str, struct test_webrtc *t)
+{
+  gchar *expected = g_object_steal_data (channel, "expected");
+  g_assert_cmpstr (expected, ==, str);
+  g_free (expected);
+
+  test_webrtc_signal_state (t, STATE_CUSTOM);
+}
+
+static void
+have_data_channel_transfer_string (struct test_webrtc *t, GstElement * element,
+    GObject * our, gpointer user_data)
+{
+  GObject *other = user_data;
+
+  g_object_set_data_full (our, "expected", g_strdup (test_string), g_free);
+  g_signal_connect (our, "on-message-string", G_CALLBACK (on_message_string),
+      t);
+
+  g_signal_emit_by_name (other, "send-string", test_string);
+}
+
+GST_START_TEST (test_data_channel_transfer_string)
+{
+  struct test_webrtc *t = test_webrtc_new ();
+  GObject *channel = NULL;
+  struct validate_sdp offer = { on_sdp_has_datachannel, NULL };
+  struct validate_sdp answer = { on_sdp_has_datachannel, NULL };
+
+  t->on_negotiation_needed = NULL;
+  t->offer_data = &offer;
+  t->on_offer_created = validate_sdp;
+  t->answer_data = &answer;
+  t->on_answer_created = validate_sdp;
+  t->on_ice_candidate = NULL;
+  t->on_data_channel = have_data_channel_transfer_string;
+
+  g_signal_emit_by_name (t->webrtc1, "create-data-channel", "label", NULL,
+      &channel);
+  g_assert_nonnull (channel);
+  t->data_channel_data = channel;
+
+  gst_element_set_state (t->webrtc1, GST_STATE_PLAYING);
+  gst_element_set_state (t->webrtc2, GST_STATE_PLAYING);
+
+  test_webrtc_create_offer (t, t->webrtc1);
+
+  test_webrtc_wait_for_state_mask (t, 1 << STATE_CUSTOM);
+
+  g_object_unref (channel);
+  test_webrtc_free (t);
+}
+
+GST_END_TEST;
+#endif
+
 static Suite *
 webrtcbin_suite (void)
 {
@@ -1429,6 +1656,13 @@ webrtcbin_suite (void)
     tcase_add_test (tc, test_add_recvonly_transceiver);
     tcase_add_test (tc, test_recvonly_sendonly);
     tcase_add_test (tc, test_payload_types);
+    tcase_add_test (tc, test_data_channel_create);
+#if ENABLE_FAILING_TESTS
+    /* sctpdec/enc doesn't handle shutdown gracefully and will spit out
+     * g_warning()s */
+    tcase_add_test (tc, test_data_channel_remote_notify);
+    tcase_add_test (tc, test_data_channel_transfer_string);
+#endif
   }
 
   if (nicesrc)
