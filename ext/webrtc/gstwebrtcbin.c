@@ -5008,8 +5008,22 @@ gst_webrtc_bin_class_init (GstWebRTCBinClass * klass)
   /**
    * GstWebRTCBin::create-data-channel:
    * @object: the #GstWebRtcBin
+   * @label: the label for the data channel
+   * @options: a #GstStructure of options for creating the data channel
    *
-   * Returns: a #GArray of #GstWebRTCRTPTransceivers
+   * The options dictionary is the same format as the RTCDataChannelInit
+   * members outlined https://www.w3.org/TR/webrtc/#dom-rtcdatachannelinit and
+   * and reproduced below
+   *
+   *  ordered               G_TYPE_BOOLEAN        Whether the channal will send data with guarenteed ordering
+   *  max-packet-lifetime   G_TYPE_INT            The time in milliseconds to attempt transmitting unacknowledged data. -1 for unset
+   *  max-retransmits       G_TYPE_INT            The number of times data will be attempted to be transmitted without acknowledgement before dropping
+   *  protocol              G_TYPE_STRING         The subprotocol used by this channel
+   *  negotiated            G_TYPE_BOOLEAN        Whether the created data channel should not perform in-band chnanel announcment.  If %TRUE, then application must negotiate the channel itself and create the corresponding channel on the peer with the same id.
+   *  id                    G_TYPE_INT            Override the default identifier selection of this channel
+   *  priority              GST_TYPE_WEBRTC_PRIORITY_TYPE   The priority to use for this channel
+   *
+   * Returns: a new data channel object
    */
   gst_webrtc_bin_signals[CREATE_DATA_CHANNEL_SIGNAL] =
       g_signal_new_class_handler ("create-data-channel",
