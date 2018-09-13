@@ -714,10 +714,11 @@ gst_webrtc_data_channel_send_string (GstWebRTCDataChannel * channel,
         rel_param);
   } else {
     gsize size = strlen (str);
+    gchar *str_copy = g_strdup (str);
 
     buffer =
-        gst_buffer_new_wrapped_full (GST_MEMORY_FLAG_READONLY, g_strdup (str),
-        size, 0, size, str, g_free);
+        gst_buffer_new_wrapped_full (GST_MEMORY_FLAG_READONLY, str_copy,
+        size, 0, size, str_copy, g_free);
 
     gst_sctp_buffer_add_send_meta (buffer,
         DATA_CHANNEL_PPID_WEBRTC_STRING, channel->ordered, reliability,
