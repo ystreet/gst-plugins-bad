@@ -1515,6 +1515,8 @@ GST_START_TEST (test_data_channel_create)
 
   test_webrtc_wait_for_answer_error_eos (t);
   fail_unless_equals_int (STATE_ANSWER_CREATED, t->state);
+  g_object_unref (channel);
+  g_free (label);
   test_webrtc_free (t);
 }
 

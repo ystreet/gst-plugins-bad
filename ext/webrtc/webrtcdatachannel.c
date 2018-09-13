@@ -836,7 +836,9 @@ gst_webrtc_data_channel_constructed (GObject * object)
   caps = gst_caps_new_any ();
 
   channel->appsrc = gst_element_factory_make ("appsrc", NULL);
+  gst_object_ref_sink (channel->appsrc);
   channel->appsink = gst_element_factory_make ("appsink", NULL);
+  gst_object_ref_sink (channel->appsink);
   g_object_set (channel->appsink, "sync", FALSE, "async", FALSE, "caps", caps,
       NULL);
   gst_app_sink_set_callbacks (GST_APP_SINK (channel->appsink), &sink_callbacks,
@@ -859,6 +861,9 @@ gst_webrtc_data_channel_finalize (GObject * object)
   if (channel->sctp_transport)
     g_signal_handlers_disconnect_by_data (channel->sctp_transport, channel);
   g_clear_object (&channel->sctp_transport);
+
+  g_clear_object (&channel->appsrc);
+  g_clear_object (&channel->appsink);
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
