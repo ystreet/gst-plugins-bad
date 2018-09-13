@@ -177,6 +177,9 @@ gst_webrtc_sctp_transport_finalize (GObject * object)
   g_signal_handlers_disconnect_by_data (sctp->sctpdec, sctp);
   g_signal_handlers_disconnect_by_data (sctp->sctpenc, sctp);
 
+  gst_object_unref (sctp->sctpdec);
+  gst_object_unref (sctp->sctpenc);
+
   g_clear_object (&sctp->transport);
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
@@ -190,9 +193,11 @@ gst_webrtc_sctp_transport_constructed (GObject * object)
 
   association_id = g_random_int_range (0, G_MAXUINT16);
 
-  sctp->sctpdec = gst_element_factory_make ("sctpdec", NULL);
+  sctp->sctpdec =
+      g_object_ref_sink (gst_element_factory_make ("sctpdec", NULL));
   g_object_set (sctp->sctpdec, "sctp-association-id", association_id, NULL);
-  sctp->sctpenc = gst_element_factory_make ("sctpenc", NULL);
+  sctp->sctpenc =
+      g_object_ref_sink (gst_element_factory_make ("sctpenc", NULL));
   g_object_set (sctp->sctpenc, "sctp-association-id", association_id, NULL);
 
   g_signal_connect (sctp->sctpdec, "pad-removed",
