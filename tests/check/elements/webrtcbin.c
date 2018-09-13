@@ -1590,6 +1590,12 @@ have_data_channel_transfer_string (struct test_webrtc *t, GstElement * element,
     GObject * our, gpointer user_data)
 {
   GObject *other = user_data;
+  GstWebRTCDataChannelState state;
+
+  g_object_get (our, "ready-state", &state, NULL);
+  fail_unless_equals_int (GST_WEBRTC_DATA_CHANNEL_STATE_OPEN, state);
+  g_object_get (other, "ready-state", &state, NULL);
+  fail_unless_equals_int (GST_WEBRTC_DATA_CHANNEL_STATE_OPEN, state);
 
   g_object_set_data_full (our, "expected", g_strdup (test_string), g_free);
   g_signal_connect (our, "on-message-string", G_CALLBACK (on_message_string),
@@ -1655,6 +1661,12 @@ have_data_channel_transfer_data (struct test_webrtc *t, GstElement * element,
 {
   GObject *other = user_data;
   GBytes *data = g_bytes_new_static (test_string, strlen (test_string));
+  GstWebRTCDataChannelState state;
+
+  g_object_get (our, "ready-state", &state, NULL);
+  fail_unless_equals_int (GST_WEBRTC_DATA_CHANNEL_STATE_OPEN, state);
+  g_object_get (other, "ready-state", &state, NULL);
+  fail_unless_equals_int (GST_WEBRTC_DATA_CHANNEL_STATE_OPEN, state);
 
   g_object_set_data_full (our, "expected", g_bytes_ref (data),
       (GDestroyNotify) g_bytes_unref);
