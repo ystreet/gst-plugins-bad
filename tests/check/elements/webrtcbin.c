@@ -1628,6 +1628,71 @@ GST_START_TEST (test_data_channel_transfer_string)
 }
 
 GST_END_TEST;
+
+#define g_assert_cmpbytes(b1, b2)                       \
+    G_STMT_START {                                      \
+      gsize l1, l2;                                     \
+      const guint8 *d1 = g_bytes_get_data (b1, &l1);    \
+      const guint8 *d2 = g_bytes_get_data (b2, &l2);    \
+      g_assert_cmpmem (d1, l1, d2, l2);                 \
+    } G_STMT_END;
+
+static void
+on_message_data (GObject * channel, GBytes * data, struct test_webrtc *t)
+{
+  GBytes *expected = g_object_steal_data (channel, "expected");
+  g_assert_cmpbytes (data, expected);
+  g_bytes_unref (expected);
+
+  test_webrtc_signal_state (t, STATE_CUSTOM);
+}
+
+static void
+have_data_channel_transfer_data (struct test_webrtc *t, GstElement * element,
+    GObject * our, gpointer user_data)
+{
+  GObject *other = user_data;
+  GBytes *data = g_bytes_new_static (test_string, strlen (test_string));
+
+  g_object_set_data_full (our, "expected", g_bytes_ref (data),
+      (GDestroyNotify) g_bytes_unref);
+  g_signal_connect (our, "on-message-data", G_CALLBACK (on_message_data), t);
+
+  g_signal_emit_by_name (other, "send-data", data);
+}
+
+GST_START_TEST (test_data_channel_transfer_data)
+{
+  struct test_webrtc *t = test_webrtc_new ();
+  GObject *channel = NULL;
+  struct validate_sdp offer = { on_sdp_has_datachannel, NULL };
+  struct validate_sdp answer = { on_sdp_has_datachannel, NULL };
+
+  t->on_negotiation_needed = NULL;
+  t->offer_data = &offer;
+  t->on_offer_created = validate_sdp;
+  t->answer_data = &answer;
+  t->on_answer_created = validate_sdp;
+  t->on_ice_candidate = NULL;
+  t->on_data_channel = have_data_channel_transfer_data;
+
+  g_signal_emit_by_name (t->webrtc1, "create-data-channel", "label", NULL,
+      &channel);
+  g_assert_nonnull (channel);
+  t->data_channel_data = channel;
+
+  gst_element_set_state (t->webrtc1, GST_STATE_PLAYING);
+  gst_element_set_state (t->webrtc2, GST_STATE_PLAYING);
+
+  test_webrtc_create_offer (t, t->webrtc1);
+
+  test_webrtc_wait_for_state_mask (t, 1 << STATE_CUSTOM);
+
+  g_object_unref (channel);
+  test_webrtc_free (t);
+}
+
+GST_END_TEST;
 #endif
 
 static Suite *
@@ -1662,6 +1727,7 @@ webrtcbin_suite (void)
      * g_warning()s */
     tcase_add_test (tc, test_data_channel_remote_notify);
     tcase_add_test (tc, test_data_channel_transfer_string);
+    tcase_add_test (tc, test_data_channel_transfer_data);
 #endif
   }
 
