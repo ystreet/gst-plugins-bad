@@ -61,6 +61,7 @@ struct _GstWebRTCDataChannel
 
   GstWebRTCBin                     *webrtcbin;
   gboolean                          opened;
+  gulong                            src_probe;
 
   gpointer                          _padding[GST_PADDING];
 };

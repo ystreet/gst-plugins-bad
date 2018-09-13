@@ -46,8 +46,7 @@ GST_DEBUG_CATEGORY_STATIC (GST_CAT_DEFAULT);
 #define gst_webrtc_data_channel_parent_class parent_class
 G_DEFINE_TYPE_WITH_CODE (GstWebRTCDataChannel, gst_webrtc_data_channel,
     GST_TYPE_OBJECT, GST_DEBUG_CATEGORY_INIT (gst_webrtc_data_channel_debug,
-        "webrtcdatachannel", 0, "webrtcdatachannel");
-    );
+        "webrtcdatachannel", 0, "webrtcdatachannel"););
 
 enum
 {
@@ -57,7 +56,7 @@ enum
   SIGNAL_ON_ERROR,
   SIGNAL_ON_MESSAGE_DATA,
   SIGNAL_ON_MESSAGE_STRING,
-  SIGNAL_BUFFERED_AMOUNT_LOW,
+  SIGNAL_ON_BUFFERED_AMOUNT_LOW,
   SIGNAL_SEND_DATA,
   SIGNAL_SEND_STRING,
   LAST_SIGNAL,
@@ -424,6 +423,11 @@ _parse_control_packet (GstWebRTCDataChannel * channel, guint8 * data,
 
     GST_INFO_OBJECT (channel, "Sending channel ack");
     buffer = construct_ack_packet (channel);
+
+    GST_OBJECT_LOCK (channel);
+    channel->buffered_amount += gst_buffer_get_size (buffer);
+    GST_OBJECT_UNLOCK (channel);
+
     return gst_app_src_push_buffer (GST_APP_SRC (channel->appsrc), buffer);
   } else {
     GST_WARNING_OBJECT (channel, "Unknown message type in control protocol");
@@ -609,6 +613,10 @@ gst_webrtc_data_channel_start_negotiation (GstWebRTCDataChannel * channel)
       "label %s protocol %s ordered %s", channel->id, channel->label,
       channel->protocol, channel->ordered ? "true" : "false");
 
+  GST_OBJECT_LOCK (channel);
+  channel->buffered_amount += gst_buffer_get_size (buffer);
+  GST_OBJECT_UNLOCK (channel);
+
   if (gst_app_src_push_buffer (GST_APP_SRC (channel->appsrc),
           buffer) == GST_FLOW_OK) {
     channel->opened = TRUE;
@@ -664,6 +672,10 @@ gst_webrtc_data_channel_send_data (GstWebRTCDataChannel * channel,
   GST_LOG_OBJECT (channel, "Sending data using buffer %" GST_PTR_FORMAT,
       buffer);
 
+  GST_OBJECT_LOCK (channel);
+  channel->buffered_amount += gst_buffer_get_size (buffer);
+  GST_OBJECT_UNLOCK (channel);
+
   ret = gst_app_src_push_buffer (GST_APP_SRC (channel->appsrc), buffer);
 
   if (ret != GST_FLOW_OK) {
@@ -715,6 +727,10 @@ gst_webrtc_data_channel_send_string (GstWebRTCDataChannel * channel,
   GST_TRACE_OBJECT (channel, "Sending string using buffer %" GST_PTR_FORMAT,
       buffer);
 
+  GST_OBJECT_LOCK (channel);
+  channel->buffered_amount += gst_buffer_get_size (buffer);
+  GST_OBJECT_UNLOCK (channel);
+
   ret = gst_app_src_push_buffer (GST_APP_SRC (channel->appsrc), buffer);
 
   if (ret != GST_FLOW_OK) {
@@ -748,6 +764,7 @@ gst_webrtc_data_channel_set_property (GObject * object, guint prop_id,
 {
   GstWebRTCDataChannel *channel = GST_WEBRTC_DATA_CHANNEL (object);
 
+  GST_OBJECT_LOCK (channel);
   switch (prop_id) {
     case PROP_LABEL:
       channel->label = g_value_dup_string (value);
@@ -773,10 +790,14 @@ gst_webrtc_data_channel_set_property (GObject * object, guint prop_id,
     case PROP_PRIORITY:
       channel->priority = g_value_get_enum (value);
       break;
+    case PROP_BUFFERED_AMOUNT_LOW_THRESHOLD:
+      channel->buffered_amount_low_threshold = g_value_get_uint64 (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
   }
+  GST_OBJECT_UNLOCK (channel);
 }
 
 static void
@@ -828,15 +849,59 @@ gst_webrtc_data_channel_get_property (GObject * object, guint prop_id,
 }
 
 static void
+_emit_low_threshold (GstWebRTCDataChannel * channel, gpointer user_data)
+{
+  GST_LOG_OBJECT (channel, "Low threshold reached");
+  g_signal_emit (channel,
+      gst_webrtc_data_channel_signals[SIGNAL_ON_BUFFERED_AMOUNT_LOW], 0);
+}
+
+static GstPadProbeReturn
+on_appsrc_data (GstPad * pad, GstPadProbeInfo * info, gpointer user_data)
+{
+  GstWebRTCDataChannel *channel = user_data;
+  guint64 prev_amount;
+  guint64 size = 0;
+
+  if (GST_PAD_PROBE_INFO_TYPE (info) & (GST_PAD_PROBE_TYPE_BUFFER)) {
+    GstBuffer *buffer = GST_PAD_PROBE_INFO_BUFFER (info);
+    size = gst_buffer_get_size (buffer);
+  } else if (GST_PAD_PROBE_INFO_TYPE (info) & GST_PAD_PROBE_TYPE_BUFFER_LIST) {
+    GstBufferList *list = GST_PAD_PROBE_INFO_BUFFER_LIST (info);
+    size = gst_buffer_list_calculate_size (list);
+  }
+
+  if (size > 0) {
+    GST_OBJECT_LOCK (channel);
+    prev_amount = channel->buffered_amount;
+    channel->buffered_amount -= size;
+    if (prev_amount > channel->buffered_amount_low_threshold &&
+        channel->buffered_amount < channel->buffered_amount_low_threshold) {
+      _channel_enqueue_task (channel, (ChannelTask) _emit_low_threshold,
+          NULL, NULL);
+    }
+    GST_OBJECT_UNLOCK (channel);
+  }
+
+  return GST_PAD_PROBE_OK;
+}
+
+static void
 gst_webrtc_data_channel_constructed (GObject * object)
 {
   GstWebRTCDataChannel *channel = GST_WEBRTC_DATA_CHANNEL (object);
+  GstPad *pad;
   GstCaps *caps;
 
   caps = gst_caps_new_any ();
 
   channel->appsrc = gst_element_factory_make ("appsrc", NULL);
   gst_object_ref_sink (channel->appsrc);
+  pad = gst_element_get_static_pad (channel->appsrc, "src");
+
+  channel->src_probe = gst_pad_add_probe (pad, GST_PAD_PROBE_TYPE_DATA_BOTH,
+      (GstPadProbeCallback) on_appsrc_data, channel, NULL);
+
   channel->appsink = gst_element_factory_make ("appsink", NULL);
   gst_object_ref_sink (channel->appsink);
   g_object_set (channel->appsink, "sync", FALSE, "async", FALSE, "caps", caps,
@@ -844,6 +909,7 @@ gst_webrtc_data_channel_constructed (GObject * object)
   gst_app_sink_set_callbacks (GST_APP_SINK (channel->appsink), &sink_callbacks,
       channel, NULL);
 
+  gst_object_unref (pad);
   gst_caps_unref (caps);
 }
 
@@ -851,6 +917,13 @@ static void
 gst_webrtc_data_channel_finalize (GObject * object)
 {
   GstWebRTCDataChannel *channel = GST_WEBRTC_DATA_CHANNEL (object);
+
+  if (channel->src_probe) {
+    GstPad *pad = gst_element_get_static_pad (channel->appsrc, "src");
+    gst_pad_remove_probe (pad, channel->src_probe);
+    gst_object_unref (pad);
+    channel->src_probe = 0;
+  }
 
   g_free (channel->label);
   channel->label = NULL;
@@ -962,7 +1035,7 @@ gst_webrtc_data_channel_class_init (GstWebRTCDataChannelClass * klass)
           "Buffered Amount Low Threshold",
           "The threshold at which the buffered amount is considered low and "
           "the buffered-amount-low signal is emitted",
-          0, G_MAXUINT64, 0, G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
+          0, G_MAXUINT64, 0, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   /**
    * GstWebRTCDataChannel::on-open:
@@ -1016,7 +1089,7 @@ gst_webrtc_data_channel_class_init (GstWebRTCDataChannelClass * klass)
    * GstWebRTCDataChannel::on-buffered-amount-low:
    * @object: the #GstWebRTCDataChannel
    */
-  gst_webrtc_data_channel_signals[SIGNAL_BUFFERED_AMOUNT_LOW] =
+  gst_webrtc_data_channel_signals[SIGNAL_ON_BUFFERED_AMOUNT_LOW] =
       g_signal_new ("on-buffered-amount-low", G_TYPE_FROM_CLASS (klass),
       G_SIGNAL_RUN_LAST, 0, NULL, NULL, g_cclosure_marshal_generic,
       G_TYPE_NONE, 0);

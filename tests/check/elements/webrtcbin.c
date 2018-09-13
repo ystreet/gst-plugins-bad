@@ -1754,6 +1754,56 @@ GST_START_TEST (test_data_channel_create_after_negotiate)
 }
 
 GST_END_TEST;
+
+static void
+on_buffered_amount_low_emitted (GObject * channel, struct test_webrtc *t)
+{
+  test_webrtc_signal_state (t, STATE_CUSTOM);
+}
+
+static void
+have_data_channel_check_low_threshold_emitted (struct test_webrtc *t,
+    GstElement * element, GObject * our, gpointer user_data)
+{
+  g_signal_connect (our, "on-buffered-amount-low",
+      G_CALLBACK (on_buffered_amount_low_emitted), t);
+  g_object_set (our, "buffered-amount-low-threshold", 1, NULL);
+
+  g_signal_emit_by_name (our, "send-string", "DATA");
+}
+
+GST_START_TEST (test_data_channel_low_threshold)
+{
+  struct test_webrtc *t = test_webrtc_new ();
+  GObject *channel = NULL;
+  struct validate_sdp offer = { on_sdp_has_datachannel, NULL };
+  struct validate_sdp answer = { on_sdp_has_datachannel, NULL };
+
+  t->on_negotiation_needed = NULL;
+  t->offer_data = &offer;
+  t->on_offer_created = validate_sdp;
+  t->answer_data = &answer;
+  t->on_answer_created = validate_sdp;
+  t->on_ice_candidate = NULL;
+  t->on_data_channel = have_data_channel_check_low_threshold_emitted;
+
+  g_signal_emit_by_name (t->webrtc1, "create-data-channel", "label", NULL,
+      &channel);
+  g_assert_nonnull (channel);
+  t->data_channel_data = channel;
+
+  gst_element_set_state (t->webrtc1, GST_STATE_PLAYING);
+  gst_element_set_state (t->webrtc2, GST_STATE_PLAYING);
+
+  test_webrtc_create_offer (t, t->webrtc1);
+
+  test_webrtc_wait_for_state_mask (t, 1 << STATE_CUSTOM);
+
+  g_object_unref (channel);
+  test_webrtc_free (t);
+}
+
+GST_END_TEST;
 #endif
 
 static Suite *
@@ -1790,6 +1840,7 @@ webrtcbin_suite (void)
     tcase_add_test (tc, test_data_channel_transfer_string);
     tcase_add_test (tc, test_data_channel_transfer_data);
     tcase_add_test (tc, test_data_channel_create_after_negotiate);
+    tcase_add_test (tc, test_data_channel_low_threshold);
 #endif
   }
 
