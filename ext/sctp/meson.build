@@ -9,7 +9,7 @@ if get_option('sctp').disabled()
   subdir_done()
 endif
 
-sctp_dep = cc.find_library('usrsctp')
+sctp_dep = cc.find_library('usrsctp', required : get_option('sctp').enabled())
 sctp_header = cc.has_header('usrsctp.h')
 
 if get_option('sctp').enabled()
