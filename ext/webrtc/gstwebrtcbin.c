@@ -300,8 +300,7 @@ gst_webrtc_bin_pad_new (const gchar * name, GstPadDirection direction)
 G_DEFINE_TYPE_WITH_CODE (GstWebRTCBin, gst_webrtc_bin, GST_TYPE_BIN,
     G_ADD_PRIVATE (GstWebRTCBin)
     GST_DEBUG_CATEGORY_INIT (gst_webrtc_bin_debug, "webrtcbin", 0,
-        "webrtcbin element");
-    );
+        "webrtcbin element"););
 
 static GstPad *_connect_input_stream (GstWebRTCBin * webrtc,
     GstWebRTCBinPad * pad);
@@ -3226,10 +3225,9 @@ _update_data_channel_from_sdp_media (GstWebRTCBin * webrtc,
 
     if (channel->id == -1)
       channel->id = _generate_data_channel_id (webrtc);
-/* FIXME:
     if (channel->id == -1)
-      failed to generate an id -> error of some description.
-*/
+      GST_ELEMENT_WARNING (webrtc, RESOURCE, NOT_FOUND,
+          ("%s", "Failed to generate an identifier for a data channel"), NULL);
 
     if (webrtc->priv->sctp_transport->association_established
         && !channel->negotiated && !channel->opened) {
@@ -3981,6 +3979,7 @@ gst_webrtc_bin_create_data_channel (GstWebRTCBin * webrtc, const gchar * label,
       GST_ELEMENT_WARNING (webrtc, LIBRARY, SETTINGS,
           ("Attempting to add a data channel with a duplicate ID: %i", id),
           NULL);
+      PC_UNLOCK (webrtc);
       return NULL;
     }
   } else if (webrtc->current_local_description
@@ -3989,8 +3988,12 @@ gst_webrtc_bin_create_data_channel (GstWebRTCBin * webrtc, const gchar * label,
     /* else we can only generate an id if we're configured already.  The other
      * case for generating an id is on sdp setting */
     id = _generate_data_channel_id (webrtc);
-    if (id == -1)
+    if (id == -1) {
+      GST_ELEMENT_WARNING (webrtc, RESOURCE, NOT_FOUND,
+          ("%s", "Failed to generate an identifier for a data channel"), NULL);
+      PC_UNLOCK (webrtc);
       return NULL;
+    }
   }
 
   ret = g_object_new (GST_TYPE_WEBRTC_DATA_CHANNEL, "label", label,
