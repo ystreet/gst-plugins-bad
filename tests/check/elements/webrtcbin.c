@@ -1707,6 +1707,53 @@ GST_START_TEST (test_data_channel_transfer_data)
 }
 
 GST_END_TEST;
+
+static void
+have_data_channel_create_data_channel (struct test_webrtc *t,
+    GstElement * element, GObject * our, gpointer user_data)
+{
+  GObject *another;
+
+  t->on_data_channel = have_data_channel_transfer_string;
+
+  g_signal_emit_by_name (t->webrtc1, "create-data-channel", "label", NULL,
+      &another);
+  g_assert_nonnull (another);
+  t->data_channel_data = another;
+}
+
+GST_START_TEST (test_data_channel_create_after_negotiate)
+{
+  struct test_webrtc *t = test_webrtc_new ();
+  GObject *channel = NULL;
+  struct validate_sdp offer = { on_sdp_has_datachannel, NULL };
+  struct validate_sdp answer = { on_sdp_has_datachannel, NULL };
+
+  t->on_negotiation_needed = NULL;
+  t->offer_data = &offer;
+  t->on_offer_created = validate_sdp;
+  t->answer_data = &answer;
+  t->on_answer_created = validate_sdp;
+  t->on_ice_candidate = NULL;
+  t->on_data_channel = have_data_channel_create_data_channel;
+
+  g_signal_emit_by_name (t->webrtc1, "create-data-channel", "prev-label", NULL,
+      &channel);
+  g_assert_nonnull (channel);
+  t->data_channel_data = channel;
+
+  gst_element_set_state (t->webrtc1, GST_STATE_PLAYING);
+  gst_element_set_state (t->webrtc2, GST_STATE_PLAYING);
+
+  test_webrtc_create_offer (t, t->webrtc1);
+
+  test_webrtc_wait_for_state_mask (t, 1 << STATE_CUSTOM);
+
+  g_object_unref (channel);
+  test_webrtc_free (t);
+}
+
+GST_END_TEST;
 #endif
 
 static Suite *
@@ -1742,6 +1789,7 @@ webrtcbin_suite (void)
     tcase_add_test (tc, test_data_channel_remote_notify);
     tcase_add_test (tc, test_data_channel_transfer_string);
     tcase_add_test (tc, test_data_channel_transfer_data);
+    tcase_add_test (tc, test_data_channel_create_after_negotiate);
 #endif
   }
 

@@ -301,7 +301,8 @@ gst_webrtc_bin_pad_new (const gchar * name, GstPadDirection direction)
 G_DEFINE_TYPE_WITH_CODE (GstWebRTCBin, gst_webrtc_bin, GST_TYPE_BIN,
     G_ADD_PRIVATE (GstWebRTCBin)
     GST_DEBUG_CATEGORY_INIT (gst_webrtc_bin_debug, "webrtcbin", 0,
-        "webrtcbin element"););
+        "webrtcbin element");
+    );
 
 static GstPad *_connect_input_stream (GstWebRTCBin * webrtc,
     GstWebRTCBinPad * pad);
@@ -4022,6 +4023,10 @@ gst_webrtc_bin_create_data_channel (GstWebRTCBin * webrtc, const gchar * label,
     ret->webrtcbin = webrtc;
     g_array_append_val (webrtc->priv->data_channels, ret);
     _link_data_channel_to_sctp (webrtc, ret);
+    if (webrtc->priv->sctp_transport &&
+        webrtc->priv->sctp_transport->association_established
+        && !ret->negotiated)
+      gst_webrtc_data_channel_start_negotiation (ret);
   }
 
   PC_UNLOCK (webrtc);
