@@ -30,13 +30,6 @@
 #include <gst/check/gstharness.h>
 #include <gst/webrtc/webrtc.h>
 
-/* most of these 'failing' tests are due to issues in the containing elements
- * like dtls and sctp but also dependant libraries like libgupnp/libnice
- * either containing races or throwing/dumping warnings/criticals.
- * They are still semi-useful as explanatory code examples and allow some
- * issues to be spotted so are left in */
-#define ENABLE_FAILING_TESTS 0
-
 #define OPUS_RTP_CAPS(pt) "application/x-rtp,payload=" G_STRINGIFY(pt) ",encoding-name=OPUS,media=audio,clock-rate=48000,ssrc=(uint)3384078950"
 #define VP8_RTP_CAPS(pt) "application/x-rtp,payload=" G_STRINGIFY(pt) ",encoding-name=VP8,media=video,clock-rate=90000,ssrc=(uint)3484078950"
 
@@ -1521,7 +1514,7 @@ GST_START_TEST (test_data_channel_create)
 }
 
 GST_END_TEST;
-#if ENABLE_FAILING_TESTS
+
 static void
 have_data_channel (struct test_webrtc *t, GstElement * element,
     GObject * our, gpointer user_data)
@@ -1804,7 +1797,6 @@ GST_START_TEST (test_data_channel_low_threshold)
 }
 
 GST_END_TEST;
-#endif
 
 static Suite *
 webrtcbin_suite (void)
@@ -1833,15 +1825,11 @@ webrtcbin_suite (void)
     tcase_add_test (tc, test_recvonly_sendonly);
     tcase_add_test (tc, test_payload_types);
     tcase_add_test (tc, test_data_channel_create);
-#if ENABLE_FAILING_TESTS
-    /* sctpdec/enc doesn't handle shutdown gracefully and will spit out
-     * g_warning()s */
     tcase_add_test (tc, test_data_channel_remote_notify);
     tcase_add_test (tc, test_data_channel_transfer_string);
     tcase_add_test (tc, test_data_channel_transfer_data);
     tcase_add_test (tc, test_data_channel_create_after_negotiate);
     tcase_add_test (tc, test_data_channel_low_threshold);
-#endif
   }
 
   if (nicesrc)
