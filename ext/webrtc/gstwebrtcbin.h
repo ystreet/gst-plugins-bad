@@ -38,7 +38,9 @@ typedef enum
   GST_WEBRTC_BIN_ERROR_INVALID_STATE,
   GST_WEBRTC_BIN_ERROR_BAD_SDP,
   GST_WEBRTC_BIN_ERROR_FINGERPRINT,
-} GstWebRTCJSEPSDPError;
+  GST_WEBRTC_BIN_ERROR_SCTP_FAILURE,
+  GST_WEBRTC_BIN_ERROR_DATA_CHANNEL_FAILURE,
+} GstWebRTCError;
 
 GType gst_webrtc_bin_pad_get_type(void);
 #define GST_TYPE_WEBRTC_BIN_PAD            (gst_webrtc_bin_pad_get_type())

@@ -1483,6 +1483,13 @@ on_sdp_has_datachannel (struct test_webrtc *t, GstElement * element,
   fail_unless_equals_int (TRUE, have_data_channel);
 }
 
+static void
+on_channel_error_not_reached (GObject * channel, GError * error,
+    gpointer user_data)
+{
+  g_assert_not_reached ();
+}
+
 GST_START_TEST (test_data_channel_create)
 {
   struct test_webrtc *t = test_webrtc_new ();
@@ -1503,6 +1510,8 @@ GST_START_TEST (test_data_channel_create)
   g_assert_nonnull (channel);
   g_object_get (channel, "label", &label, NULL);
   g_assert_cmpstr (label, ==, "label");
+  g_signal_connect (channel, "on-error",
+      G_CALLBACK (on_channel_error_not_reached), NULL);
 
   test_webrtc_create_offer (t, t->webrtc1);
 
@@ -1521,6 +1530,9 @@ have_data_channel (struct test_webrtc *t, GstElement * element,
 {
   GObject *other = user_data;
   gchar *our_label, *other_label;
+
+  g_signal_connect (our, "on-error", G_CALLBACK (on_channel_error_not_reached),
+      NULL);
 
   g_object_get (our, "label", &our_label, NULL);
   g_object_get (other, "label", &other_label, NULL);
@@ -1552,6 +1564,8 @@ GST_START_TEST (test_data_channel_remote_notify)
       &channel);
   g_assert_nonnull (channel);
   t->data_channel_data = channel;
+  g_signal_connect (channel, "on-error",
+      G_CALLBACK (on_channel_error_not_reached), NULL);
 
   gst_element_set_state (t->webrtc1, GST_STATE_PLAYING);
   gst_element_set_state (t->webrtc2, GST_STATE_PLAYING);
@@ -1594,6 +1608,8 @@ have_data_channel_transfer_string (struct test_webrtc *t, GstElement * element,
   g_signal_connect (our, "on-message-string", G_CALLBACK (on_message_string),
       t);
 
+  g_signal_connect (other, "on-error",
+      G_CALLBACK (on_channel_error_not_reached), NULL);
   g_signal_emit_by_name (other, "send-string", test_string);
 }
 
@@ -1616,6 +1632,8 @@ GST_START_TEST (test_data_channel_transfer_string)
       &channel);
   g_assert_nonnull (channel);
   t->data_channel_data = channel;
+  g_signal_connect (channel, "on-error",
+      G_CALLBACK (on_channel_error_not_reached), NULL);
 
   gst_element_set_state (t->webrtc1, GST_STATE_PLAYING);
   gst_element_set_state (t->webrtc2, GST_STATE_PLAYING);
@@ -1665,6 +1683,8 @@ have_data_channel_transfer_data (struct test_webrtc *t, GstElement * element,
       (GDestroyNotify) g_bytes_unref);
   g_signal_connect (our, "on-message-data", G_CALLBACK (on_message_data), t);
 
+  g_signal_connect (other, "on-error",
+      G_CALLBACK (on_channel_error_not_reached), NULL);
   g_signal_emit_by_name (other, "send-data", data);
 }
 
@@ -1687,6 +1707,8 @@ GST_START_TEST (test_data_channel_transfer_data)
       &channel);
   g_assert_nonnull (channel);
   t->data_channel_data = channel;
+  g_signal_connect (channel, "on-error",
+      G_CALLBACK (on_channel_error_not_reached), NULL);
 
   gst_element_set_state (t->webrtc1, GST_STATE_PLAYING);
   gst_element_set_state (t->webrtc2, GST_STATE_PLAYING);
@@ -1713,6 +1735,8 @@ have_data_channel_create_data_channel (struct test_webrtc *t,
       &another);
   g_assert_nonnull (another);
   t->data_channel_data = another;
+  g_signal_connect (another, "on-error",
+      G_CALLBACK (on_channel_error_not_reached), NULL);
 }
 
 GST_START_TEST (test_data_channel_create_after_negotiate)
@@ -1734,6 +1758,8 @@ GST_START_TEST (test_data_channel_create_after_negotiate)
       &channel);
   g_assert_nonnull (channel);
   t->data_channel_data = channel;
+  g_signal_connect (channel, "on-error",
+      G_CALLBACK (on_channel_error_not_reached), NULL);
 
   gst_element_set_state (t->webrtc1, GST_STATE_PLAYING);
   gst_element_set_state (t->webrtc2, GST_STATE_PLAYING);
@@ -1762,6 +1788,8 @@ have_data_channel_check_low_threshold_emitted (struct test_webrtc *t,
       G_CALLBACK (on_buffered_amount_low_emitted), t);
   g_object_set (our, "buffered-amount-low-threshold", 1, NULL);
 
+  g_signal_connect (our, "on-error", G_CALLBACK (on_channel_error_not_reached),
+      NULL);
   g_signal_emit_by_name (our, "send-string", "DATA");
 }
 

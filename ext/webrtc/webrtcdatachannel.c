@@ -46,7 +46,8 @@ GST_DEBUG_CATEGORY_STATIC (GST_CAT_DEFAULT);
 #define gst_webrtc_data_channel_parent_class parent_class
 G_DEFINE_TYPE_WITH_CODE (GstWebRTCDataChannel, gst_webrtc_data_channel,
     GST_TYPE_OBJECT, GST_DEBUG_CATEGORY_INIT (gst_webrtc_data_channel_debug,
-        "webrtcdatachannel", 0, "webrtcdatachannel"););
+        "webrtcdatachannel", 0, "webrtcdatachannel");
+    );
 
 enum
 {
@@ -59,6 +60,7 @@ enum
   SIGNAL_ON_BUFFERED_AMOUNT_LOW,
   SIGNAL_SEND_DATA,
   SIGNAL_SEND_STRING,
+  SIGNAL_CLOSE,
   LAST_SIGNAL,
 };
 
@@ -282,11 +284,28 @@ _channel_enqueue_task (GstWebRTCDataChannel * channel, ChannelTask func,
 }
 
 static void
-_emit_on_error (GstWebRTCDataChannel * channel, gpointer user_data)
+_channel_store_error (GstWebRTCDataChannel * channel, GError * error)
 {
-  GST_WARNING_OBJECT (channel, "error thrown");
-  g_signal_emit (channel, gst_webrtc_data_channel_signals[SIGNAL_ON_ERROR], 0,
-      NULL);
+  GST_OBJECT_LOCK (channel);
+  if (error) {
+    GST_WARNING_OBJECT (channel, "Error: %s",
+        error ? error->message : "Unknown");
+    if (!channel->stored_error)
+      channel->stored_error = error;
+    else
+      g_clear_error (&error);
+  }
+  GST_OBJECT_UNLOCK (channel);
+}
+
+static void
+_maybe_emit_on_error (GstWebRTCDataChannel * channel, GError * error)
+{
+  if (error) {
+    GST_WARNING_OBJECT (channel, "error thrown");
+    g_signal_emit (channel, gst_webrtc_data_channel_signals[SIGNAL_ON_ERROR], 0,
+        error);
+  }
 }
 
 static void
@@ -313,21 +332,80 @@ _emit_on_open (GstWebRTCDataChannel * channel, gpointer user_data)
 }
 
 static void
-_emit_on_close (GstWebRTCDataChannel * channel, gpointer user_data)
+_transport_closed_unlocked (GstWebRTCDataChannel * channel)
 {
-  GST_OBJECT_LOCK (channel);
-  if (channel->ready_state == GST_WEBRTC_DATA_CHANNEL_STATE_CLOSED) {
-    GST_OBJECT_UNLOCK (channel);
+  GError *error;
+
+  if (channel->ready_state == GST_WEBRTC_DATA_CHANNEL_STATE_CLOSED)
     return;
-  }
 
   channel->ready_state = GST_WEBRTC_DATA_CHANNEL_STATE_CLOSED;
+
+  error = channel->stored_error;
+  channel->stored_error = NULL;
   GST_OBJECT_UNLOCK (channel);
 
   g_object_notify (G_OBJECT (channel), "ready-state");
   GST_INFO_OBJECT (channel, "We are closed for data");
+
+  _maybe_emit_on_error (channel, error);
+
   g_signal_emit (channel, gst_webrtc_data_channel_signals[SIGNAL_ON_CLOSE], 0,
       NULL);
+  GST_OBJECT_LOCK (channel);
+}
+
+static void
+_transport_closed (GstWebRTCDataChannel * channel, gpointer user_data)
+{
+  GST_OBJECT_LOCK (channel);
+  _transport_closed_unlocked (channel);
+  GST_OBJECT_UNLOCK (channel);
+}
+
+static void
+_close_sctp_stream (GstWebRTCDataChannel * channel, gpointer user_data)
+{
+  GstPad *pad, *peer;
+
+  pad = gst_element_get_static_pad (channel->appsrc, "src");
+  peer = gst_pad_get_peer (pad);
+  gst_object_unref (pad);
+
+  if (peer) {
+    GstElement *sctpenc = gst_pad_get_parent_element (peer);
+
+    if (sctpenc) {
+      gst_element_release_request_pad (sctpenc, peer);
+      gst_object_unref (sctpenc);
+    }
+    gst_object_unref (peer);
+  }
+
+  _transport_closed (channel);
+}
+
+static void
+_close_procedure (GstWebRTCDataChannel * channel, gpointer user_data)
+{
+  /* https://www.w3.org/TR/webrtc/#data-transport-closing-procedure */
+  GST_OBJECT_LOCK (channel);
+  if (channel->ready_state == GST_WEBRTC_DATA_CHANNEL_STATE_CLOSED
+      || channel->ready_state == GST_WEBRTC_DATA_CHANNEL_STATE_CLOSING) {
+    GST_OBJECT_UNLOCK (channel);
+    return;
+  }
+  channel->ready_state = GST_WEBRTC_DATA_CHANNEL_STATE_CLOSING;
+  GST_OBJECT_UNLOCK (channel);
+  g_object_notify (G_OBJECT (channel), "ready-state");
+
+  GST_OBJECT_LOCK (channel);
+  if (channel->buffered_amount <= 0) {
+    _channel_enqueue_task (channel, (ChannelTask) _close_sctp_stream,
+        NULL, NULL);
+  }
+
+  GST_OBJECT_UNLOCK (channel);
 }
 
 static void
@@ -335,13 +413,19 @@ _on_sctp_reset_stream (GstWebRTCSCTPTransport * sctp, guint stream_id,
     GstWebRTCDataChannel * channel)
 {
   if (channel->id == stream_id)
-    _channel_enqueue_task (channel, (ChannelTask) _emit_on_close,
+    _channel_enqueue_task (channel, (ChannelTask) _transport_closed,
         GUINT_TO_POINTER (stream_id), NULL);
+}
+
+static void
+gst_webrtc_data_channel_close (GstWebRTCDataChannel * channel)
+{
+  _close_procedure (channel, NULL);
 }
 
 static GstFlowReturn
 _parse_control_packet (GstWebRTCDataChannel * channel, guint8 * data,
-    gsize size)
+    gsize size, GError ** error)
 {
   GstByteReader r;
   guint8 message_type;
@@ -367,35 +451,40 @@ _parse_control_packet (GstWebRTCDataChannel * channel, guint8 * data,
     const guint8 *src;
     gchar *label, *proto;
     GstBuffer *buffer;
+    GstFlowReturn ret;
 
     GST_INFO_OBJECT (channel, "Received channel open");
 
-    if (channel->negotiated)
+    if (channel->negotiated) {
+      g_set_error (error, GST_WEBRTC_BIN_ERROR,
+          GST_WEBRTC_BIN_ERROR_DATA_CHANNEL_FAILURE,
+          "Data channel was signalled as negotiated already");
       g_return_val_if_reached (GST_FLOW_ERROR);
+    }
 
     if (channel->opened)
       return GST_FLOW_OK;
 
     if (!gst_byte_reader_get_uint8 (&r, &reliability))
-      g_return_val_if_reached (GST_FLOW_ERROR);
+      goto parse_error;
     if (!gst_byte_reader_get_uint16_be (&r, &priority))
-      g_return_val_if_reached (GST_FLOW_ERROR);
+      goto parse_error;
     if (!gst_byte_reader_get_uint32_be (&r, &reliability_param))
-      g_return_val_if_reached (GST_FLOW_ERROR);
+      goto parse_error;
     if (!gst_byte_reader_get_uint16_be (&r, &label_len))
-      g_return_val_if_reached (GST_FLOW_ERROR);
+      goto parse_error;
     if (!gst_byte_reader_get_uint16_be (&r, &proto_len))
-      g_return_val_if_reached (GST_FLOW_ERROR);
+      goto parse_error;
 
     label = g_new0 (gchar, (gsize) label_len + 1);
     proto = g_new0 (gchar, (gsize) proto_len + 1);
 
     if (!gst_byte_reader_get_data (&r, label_len, &src))
-      g_return_val_if_reached (GST_FLOW_ERROR);
+      goto parse_error;
     memcpy (label, src, label_len);
     label[label_len] = '\0';
     if (!gst_byte_reader_get_data (&r, proto_len, &src))
-      g_return_val_if_reached (GST_FLOW_ERROR);
+      goto parse_error;
     memcpy (proto, src, proto_len);
     proto[proto_len] = '\0';
 
@@ -428,10 +517,25 @@ _parse_control_packet (GstWebRTCDataChannel * channel, guint8 * data,
     channel->buffered_amount += gst_buffer_get_size (buffer);
     GST_OBJECT_UNLOCK (channel);
 
-    return gst_app_src_push_buffer (GST_APP_SRC (channel->appsrc), buffer);
+    ret = gst_app_src_push_buffer (GST_APP_SRC (channel->appsrc), buffer);
+    if (ret != GST_FLOW_OK) {
+      g_set_error (error, GST_WEBRTC_BIN_ERROR,
+          GST_WEBRTC_BIN_ERROR_DATA_CHANNEL_FAILURE,
+          "Could not send ack packet");
+    }
+    return ret;
   } else {
-    GST_WARNING_OBJECT (channel, "Unknown message type in control protocol");
+    g_set_error (error, GST_WEBRTC_BIN_ERROR,
+        GST_WEBRTC_BIN_ERROR_DATA_CHANNEL_FAILURE,
+        "Unknown message type in control protocol");
     return GST_FLOW_ERROR;
+  }
+
+parse_error:
+  {
+    g_set_error (error, GST_WEBRTC_BIN_ERROR,
+        GST_WEBRTC_BIN_ERROR_DATA_CHANNEL_FAILURE, "Failed to parse packet");
+    g_return_val_if_reached (GST_FLOW_ERROR);
   }
 }
 
@@ -471,7 +575,8 @@ _emit_have_string (GstWebRTCDataChannel * channel, gchar * str)
 }
 
 static GstFlowReturn
-_data_channel_have_sample (GstWebRTCDataChannel * channel, GstSample * sample)
+_data_channel_have_sample (GstWebRTCDataChannel * channel, GstSample * sample,
+    GError ** error)
 {
   GstSctpReceiveMeta *receive;
   GstBuffer *buffer;
@@ -482,20 +587,29 @@ _data_channel_have_sample (GstWebRTCDataChannel * channel, GstSample * sample)
   g_return_val_if_fail (channel->sctp_transport != NULL, GST_FLOW_ERROR);
 
   buffer = gst_sample_get_buffer (sample);
-  if (!buffer)
+  if (!buffer) {
+    g_set_error (error, GST_WEBRTC_BIN_ERROR,
+        GST_WEBRTC_BIN_ERROR_DATA_CHANNEL_FAILURE, "No buffer to handle");
     return GST_FLOW_ERROR;
+  }
   receive = gst_sctp_buffer_get_receive_meta (buffer);
-  if (!receive)
+  if (!receive) {
+    g_set_error (error, GST_WEBRTC_BIN_ERROR,
+        GST_WEBRTC_BIN_ERROR_DATA_CHANNEL_FAILURE,
+        "No SCTP Receive meta on the buffer");
     return GST_FLOW_ERROR;
+  }
 
   switch (receive->ppid) {
     case DATA_CHANNEL_PPID_WEBRTC_CONTROL:{
       GstMapInfo info = GST_MAP_INFO_INIT;
       if (!gst_buffer_map (buffer, &info, GST_MAP_READ)) {
-        GST_WARNING_OBJECT (channel, "Failed to map received buffer");
+        g_set_error (error, GST_WEBRTC_BIN_ERROR,
+            GST_WEBRTC_BIN_ERROR_DATA_CHANNEL_FAILURE,
+            "Failed to map received buffer");
         ret = GST_FLOW_ERROR;
       } else {
-        ret = _parse_control_packet (channel, info.data, info.size);
+        ret = _parse_control_packet (channel, info.data, info.size, error);
       }
       break;
     }
@@ -503,7 +617,9 @@ _data_channel_have_sample (GstWebRTCDataChannel * channel, GstSample * sample)
     case DATA_CHANNEL_PPID_WEBRTC_STRING_PARTIAL:{
       GstMapInfo info = GST_MAP_INFO_INIT;
       if (!gst_buffer_map (buffer, &info, GST_MAP_READ)) {
-        GST_WARNING_OBJECT (channel, "Failed to map received buffer");
+        g_set_error (error, GST_WEBRTC_BIN_ERROR,
+            GST_WEBRTC_BIN_ERROR_DATA_CHANNEL_FAILURE,
+            "Failed to map received buffer");
         ret = GST_FLOW_ERROR;
       } else {
         gchar *str = g_strndup ((gchar *) info.data, info.size);
@@ -516,7 +632,9 @@ _data_channel_have_sample (GstWebRTCDataChannel * channel, GstSample * sample)
     case DATA_CHANNEL_PPID_WEBRTC_BINARY_PARTIAL:{
       struct map_info *info = g_new0 (struct map_info, 1);
       if (!gst_buffer_map (buffer, &info->map_info, GST_MAP_READ)) {
-        GST_WARNING_OBJECT (channel, "Failed to map received buffer");
+        g_set_error (error, GST_WEBRTC_BIN_ERROR,
+            GST_WEBRTC_BIN_ERROR_DATA_CHANNEL_FAILURE,
+            "Failed to map received buffer");
         ret = GST_FLOW_ERROR;
       } else {
         GBytes *data = g_bytes_new_with_free_func (info->map_info.data,
@@ -536,7 +654,9 @@ _data_channel_have_sample (GstWebRTCDataChannel * channel, GstSample * sample)
           NULL);
       break;
     default:
-      GST_ERROR_OBJECT (channel, "Unknown PPID %u received", receive->ppid);
+      g_set_error (error, GST_WEBRTC_BIN_ERROR,
+          GST_WEBRTC_BIN_ERROR_DATA_CHANNEL_FAILURE,
+          "Unknown SCTP PPID %u received", receive->ppid);
       ret = GST_FLOW_ERROR;
       break;
   }
@@ -563,7 +683,7 @@ on_sink_preroll (GstAppSink * sink, gpointer user_data)
   }
 
   if (ret != GST_FLOW_OK) {
-    _channel_enqueue_task (channel, (ChannelTask) _emit_on_error, NULL, NULL);
+    _channel_enqueue_task (channel, (ChannelTask) _close_procedure, NULL, NULL);
   }
 
   return ret;
@@ -575,9 +695,10 @@ on_sink_sample (GstAppSink * sink, gpointer user_data)
   GstWebRTCDataChannel *channel = user_data;
   GstSample *sample = gst_app_sink_pull_sample (sink);
   GstFlowReturn ret;
+  GError *error = NULL;
 
   if (sample) {
-    ret = _data_channel_have_sample (channel, sample);
+    ret = _data_channel_have_sample (channel, sample, &error);
     gst_sample_unref (sample);
   } else if (gst_app_sink_is_eos (sink)) {
     ret = GST_FLOW_EOS;
@@ -585,8 +706,11 @@ on_sink_sample (GstAppSink * sink, gpointer user_data)
     ret = GST_FLOW_ERROR;
   }
 
+  if (error)
+    _channel_store_error (channel, error);
+
   if (ret != GST_FLOW_OK) {
-    _channel_enqueue_task (channel, (ChannelTask) _emit_on_error, NULL, NULL);
+    _channel_enqueue_task (channel, (ChannelTask) _close_procedure, NULL, NULL);
   }
 
   return ret;
@@ -622,7 +746,12 @@ gst_webrtc_data_channel_start_negotiation (GstWebRTCDataChannel * channel)
     channel->opened = TRUE;
     _channel_enqueue_task (channel, (ChannelTask) _emit_on_open, NULL, NULL);
   } else {
-    _channel_enqueue_task (channel, (ChannelTask) _emit_on_error, NULL, NULL);
+    GError *error = NULL;
+    g_set_error (&error, GST_WEBRTC_BIN_ERROR,
+        GST_WEBRTC_BIN_ERROR_DATA_CHANNEL_FAILURE,
+        "Failed to send DCEP open packet");
+    _channel_store_error (channel, error);
+    _channel_enqueue_task (channel, (ChannelTask) _close_procedure, NULL, NULL);
   }
 }
 
@@ -667,7 +796,16 @@ gst_webrtc_data_channel_send_data (GstWebRTCDataChannel * channel,
 
     data = (guint8 *) g_bytes_get_data (bytes, &size);
     g_return_if_fail (data != NULL);
-    g_return_if_fail (_is_within_max_message_size (channel, size));
+    if (!_is_within_max_message_size (channel, size)) {
+      GError *error = NULL;
+      g_set_error (&error, GST_WEBRTC_BIN_ERROR,
+          GST_WEBRTC_BIN_ERROR_DATA_CHANNEL_FAILURE,
+          "Requested to send data that is too large");
+      _channel_store_error (channel, error);
+      _channel_enqueue_task (channel, (ChannelTask) _close_procedure, NULL,
+          NULL);
+      return;
+    }
 
     buffer = gst_buffer_new_wrapped_full (GST_MEMORY_FLAG_READONLY, data, size,
         0, size, bytes, (GDestroyNotify) g_bytes_unref);
@@ -688,7 +826,11 @@ gst_webrtc_data_channel_send_data (GstWebRTCDataChannel * channel,
   ret = gst_app_src_push_buffer (GST_APP_SRC (channel->appsrc), buffer);
 
   if (ret != GST_FLOW_OK) {
-    _channel_enqueue_task (channel, (ChannelTask) _emit_on_error, NULL, NULL);
+    GError *error = NULL;
+    g_set_error (&error, GST_WEBRTC_BIN_ERROR,
+        GST_WEBRTC_BIN_ERROR_DATA_CHANNEL_FAILURE, "Failed to send data");
+    _channel_store_error (channel, error);
+    _channel_enqueue_task (channel, (ChannelTask) _close_procedure, NULL, NULL);
   }
 }
 
@@ -712,7 +854,16 @@ gst_webrtc_data_channel_send_string (GstWebRTCDataChannel * channel,
     gsize size = strlen (str);
     gchar *str_copy = g_strdup (str);
 
-    g_return_if_fail (_is_within_max_message_size (channel, size));
+    if (!_is_within_max_message_size (channel, size)) {
+      GError *error = NULL;
+      g_set_error (&error, GST_WEBRTC_BIN_ERROR,
+          GST_WEBRTC_BIN_ERROR_DATA_CHANNEL_FAILURE,
+          "Requested to send a string that is too large");
+      _channel_store_error (channel, error);
+      _channel_enqueue_task (channel, (ChannelTask) _close_procedure, NULL,
+          NULL);
+      return;
+    }
 
     buffer =
         gst_buffer_new_wrapped_full (GST_MEMORY_FLAG_READONLY, str_copy,
@@ -734,7 +885,11 @@ gst_webrtc_data_channel_send_string (GstWebRTCDataChannel * channel,
   ret = gst_app_src_push_buffer (GST_APP_SRC (channel->appsrc), buffer);
 
   if (ret != GST_FLOW_OK) {
-    _channel_enqueue_task (channel, (ChannelTask) _emit_on_error, NULL, NULL);
+    GError *error = NULL;
+    g_set_error (&error, GST_WEBRTC_BIN_ERROR,
+        GST_WEBRTC_BIN_ERROR_DATA_CHANNEL_FAILURE, "Failed to send string");
+    _channel_store_error (channel, error);
+    _channel_enqueue_task (channel, (ChannelTask) _close_procedure, NULL, NULL);
   }
 }
 
@@ -879,6 +1034,12 @@ on_appsrc_data (GstPad * pad, GstPadProbeInfo * info, gpointer user_data)
         channel->buffered_amount < channel->buffered_amount_low_threshold) {
       _channel_enqueue_task (channel, (ChannelTask) _emit_low_threshold,
           NULL, NULL);
+    }
+
+    if (channel->ready_state == GST_WEBRTC_DATA_CHANNEL_STATE_CLOSING
+        && channel->buffered_amount <= 0) {
+      _channel_enqueue_task (channel, (ChannelTask) _close_sctp_stream, NULL,
+          NULL);
     }
     GST_OBJECT_UNLOCK (channel);
   }
@@ -1115,6 +1276,18 @@ gst_webrtc_data_channel_class_init (GstWebRTCDataChannelClass * klass)
       G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
       G_CALLBACK (gst_webrtc_data_channel_send_string), NULL, NULL,
       g_cclosure_marshal_generic, G_TYPE_NONE, 1, G_TYPE_STRING);
+
+  /**
+   * GstWebRTCDataChannel::close:
+   * @object: the #GstWebRTCDataChannel
+   *
+   * Close the data channel
+   */
+  gst_webrtc_data_channel_signals[SIGNAL_CLOSE] =
+      g_signal_new_class_handler ("close", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
+      G_CALLBACK (gst_webrtc_data_channel_close), NULL, NULL,
+      g_cclosure_marshal_generic, G_TYPE_NONE, 0);
 }
 
 static void
