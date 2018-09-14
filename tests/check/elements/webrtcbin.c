@@ -1812,6 +1812,72 @@ GST_START_TEST (test_data_channel_low_threshold)
       &channel);
   g_assert_nonnull (channel);
   t->data_channel_data = channel;
+  g_signal_connect (channel, "on-error",
+      G_CALLBACK (on_channel_error_not_reached), NULL);
+
+  gst_element_set_state (t->webrtc1, GST_STATE_PLAYING);
+  gst_element_set_state (t->webrtc2, GST_STATE_PLAYING);
+
+  test_webrtc_create_offer (t, t->webrtc1);
+
+  test_webrtc_wait_for_state_mask (t, 1 << STATE_CUSTOM);
+
+  g_object_unref (channel);
+  test_webrtc_free (t);
+}
+
+GST_END_TEST;
+
+static void
+on_channel_error (GObject * channel, GError * error, struct test_webrtc *t)
+{
+  g_assert_nonnull (error);
+
+  test_webrtc_signal_state (t, STATE_CUSTOM);
+}
+
+static void
+have_data_channel_transfer_large_data (struct test_webrtc *t,
+    GstElement * element, GObject * our, gpointer user_data)
+{
+  GObject *other = user_data;
+  const gsize size = 1024 * 1024;
+  guint8 *random_data = g_new (guint8, size);
+  GBytes *data;
+  gsize i;
+
+  for (i = 0; i < size; i++)
+    random_data[i] = (guint8) (i & 0xff);
+
+  data = g_bytes_new_static (random_data, size);
+
+  g_object_set_data_full (our, "expected", g_bytes_ref (data),
+      (GDestroyNotify) g_bytes_unref);
+  g_signal_connect (our, "on-message-data", G_CALLBACK (on_message_data), t);
+
+  g_signal_connect (other, "on-error", G_CALLBACK (on_channel_error), t);
+  g_signal_emit_by_name (other, "send-data", data);
+}
+
+GST_START_TEST (test_data_channel_max_message_size)
+{
+  struct test_webrtc *t = test_webrtc_new ();
+  GObject *channel = NULL;
+  struct validate_sdp offer = { on_sdp_has_datachannel, NULL };
+  struct validate_sdp answer = { on_sdp_has_datachannel, NULL };
+
+  t->on_negotiation_needed = NULL;
+  t->offer_data = &offer;
+  t->on_offer_created = validate_sdp;
+  t->answer_data = &answer;
+  t->on_answer_created = validate_sdp;
+  t->on_ice_candidate = NULL;
+  t->on_data_channel = have_data_channel_transfer_large_data;
+
+  g_signal_emit_by_name (t->webrtc1, "create-data-channel", "label", NULL,
+      &channel);
+  g_assert_nonnull (channel);
+  t->data_channel_data = channel;
 
   gst_element_set_state (t->webrtc1, GST_STATE_PLAYING);
   gst_element_set_state (t->webrtc2, GST_STATE_PLAYING);
@@ -1858,6 +1924,7 @@ webrtcbin_suite (void)
     tcase_add_test (tc, test_data_channel_transfer_data);
     tcase_add_test (tc, test_data_channel_create_after_negotiate);
     tcase_add_test (tc, test_data_channel_low_threshold);
+    tcase_add_test (tc, test_data_channel_max_message_size);
   }
 
   if (nicesrc)

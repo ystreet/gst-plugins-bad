@@ -382,7 +382,7 @@ _close_sctp_stream (GstWebRTCDataChannel * channel, gpointer user_data)
     gst_object_unref (peer);
   }
 
-  _transport_closed (channel);
+  _transport_closed (channel, NULL);
 }
 
 static void
