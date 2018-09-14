@@ -300,7 +300,8 @@ gst_webrtc_bin_pad_new (const gchar * name, GstPadDirection direction)
 G_DEFINE_TYPE_WITH_CODE (GstWebRTCBin, gst_webrtc_bin, GST_TYPE_BIN,
     G_ADD_PRIVATE (GstWebRTCBin)
     GST_DEBUG_CATEGORY_INIT (gst_webrtc_bin_debug, "webrtcbin", 0,
-        "webrtcbin element"););
+        "webrtcbin element");
+    );
 
 static GstPad *_connect_input_stream (GstWebRTCBin * webrtc,
     GstWebRTCBinPad * pad);
@@ -3187,6 +3188,7 @@ _update_data_channel_from_sdp_media (GstWebRTCBin * webrtc,
   GstWebRTCDTLSSetup local_setup, remote_setup, new_setup;
   TransportReceiveBin *receive;
   int local_port, remote_port;
+  guint64 local_max_size, remote_max_size, max_size;
   int i;
 
   local_media =
@@ -3211,6 +3213,16 @@ _update_data_channel_from_sdp_media (GstWebRTCBin * webrtc,
   remote_port = _get_sctp_port_from_media (local_media);
   if (local_port == -1 || remote_port == -1)
     return;
+
+  if (0 == (local_max_size =
+          _get_sctp_max_message_size_from_media (local_media)))
+    local_max_size = G_MAXUINT64;
+  if (0 == (remote_max_size =
+          _get_sctp_max_message_size_from_media (remote_media)))
+    remote_max_size = G_MAXUINT64;
+  max_size = MIN (local_max_size, remote_max_size);
+
+  webrtc->priv->sctp_transport->max_message_size = max_size;
 
   g_object_set (webrtc->priv->sctp_transport->sctpdec, "local-sctp-port",
       local_port, NULL);

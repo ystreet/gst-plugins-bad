@@ -627,47 +627,56 @@ gst_webrtc_data_channel_start_negotiation (GstWebRTCDataChannel * channel)
 }
 
 static void
+_get_sctp_reliability (GstWebRTCDataChannel * channel,
+    GstSctpSendMetaPartiallyReliability * reliability, guint * rel_param)
+{
+  if (channel->max_retransmits != -1) {
+    *reliability = GST_SCTP_SEND_META_PARTIAL_RELIABILITY_RTX;
+    *rel_param = channel->max_retransmits;
+  } else if (channel->max_packet_lifetime != -1) {
+    *reliability = GST_SCTP_SEND_META_PARTIAL_RELIABILITY_TTL;
+    *rel_param = channel->max_packet_lifetime;
+  } else {
+    *reliability = GST_SCTP_SEND_META_PARTIAL_RELIABILITY_NONE;
+    *rel_param = 0;
+  }
+}
+
+static gboolean
+_is_within_max_message_size (GstWebRTCDataChannel * channel, gsize size)
+{
+  return size <= channel->sctp_transport->max_message_size;
+}
+
+static void
 gst_webrtc_data_channel_send_data (GstWebRTCDataChannel * channel,
     GBytes * bytes)
 {
   GstSctpSendMetaPartiallyReliability reliability;
   guint rel_param;
+  guint32 ppid;
   GstBuffer *buffer;
   GstFlowReturn ret;
 
-  g_return_if_fail (!channel->negotiated && channel->opened);
-  g_return_if_fail (channel->sctp_transport != NULL);
-
-  if (channel->max_retransmits != -1) {
-    reliability = GST_SCTP_SEND_META_PARTIAL_RELIABILITY_RTX;
-    rel_param = channel->max_retransmits;
-  } else if (channel->max_packet_lifetime != -1) {
-    reliability = GST_SCTP_SEND_META_PARTIAL_RELIABILITY_TTL;
-    rel_param = channel->max_packet_lifetime;
-  } else {
-    reliability = GST_SCTP_SEND_META_PARTIAL_RELIABILITY_NONE;
-    rel_param = 0;
-  }
-
   if (!bytes) {
     buffer = gst_buffer_new ();
-
-    gst_sctp_buffer_add_send_meta (buffer,
-        DATA_CHANNEL_PPID_WEBRTC_BINARY_EMPTY, channel->ordered, reliability,
-        rel_param);
+    ppid = DATA_CHANNEL_PPID_WEBRTC_BINARY_EMPTY;
   } else {
     gsize size;
     guint8 *data;
 
     data = (guint8 *) g_bytes_get_data (bytes, &size);
     g_return_if_fail (data != NULL);
+    g_return_if_fail (_is_within_max_message_size (channel, size));
+
     buffer = gst_buffer_new_wrapped_full (GST_MEMORY_FLAG_READONLY, data, size,
         0, size, bytes, (GDestroyNotify) g_bytes_unref);
-
-    gst_sctp_buffer_add_send_meta (buffer,
-        DATA_CHANNEL_PPID_WEBRTC_BINARY, channel->ordered, reliability,
-        rel_param);
+    ppid = DATA_CHANNEL_PPID_WEBRTC_BINARY;
   }
+
+  _get_sctp_reliability (channel, &reliability, &rel_param);
+  gst_sctp_buffer_add_send_meta (buffer, ppid, channel->ordered, reliability,
+      rel_param);
 
   GST_LOG_OBJECT (channel, "Sending data using buffer %" GST_PTR_FORMAT,
       buffer);
@@ -689,41 +698,31 @@ gst_webrtc_data_channel_send_string (GstWebRTCDataChannel * channel,
 {
   GstSctpSendMetaPartiallyReliability reliability;
   guint rel_param;
+  guint32 ppid;
   GstBuffer *buffer;
   GstFlowReturn ret;
 
   g_return_if_fail (!channel->negotiated && channel->opened);
   g_return_if_fail (channel->sctp_transport != NULL);
 
-  if (channel->max_retransmits != -1) {
-    reliability = GST_SCTP_SEND_META_PARTIAL_RELIABILITY_RTX;
-    rel_param = channel->max_retransmits;
-  } else if (channel->max_packet_lifetime != -1) {
-    reliability = GST_SCTP_SEND_META_PARTIAL_RELIABILITY_TTL;
-    rel_param = channel->max_packet_lifetime;
-  } else {
-    reliability = GST_SCTP_SEND_META_PARTIAL_RELIABILITY_NONE;
-    rel_param = 0;
-  }
-
   if (!str) {
     buffer = gst_buffer_new ();
-
-    gst_sctp_buffer_add_send_meta (buffer,
-        DATA_CHANNEL_PPID_WEBRTC_STRING_EMPTY, channel->ordered, reliability,
-        rel_param);
+    ppid = DATA_CHANNEL_PPID_WEBRTC_STRING_EMPTY;
   } else {
     gsize size = strlen (str);
     gchar *str_copy = g_strdup (str);
 
+    g_return_if_fail (_is_within_max_message_size (channel, size));
+
     buffer =
         gst_buffer_new_wrapped_full (GST_MEMORY_FLAG_READONLY, str_copy,
         size, 0, size, str_copy, g_free);
-
-    gst_sctp_buffer_add_send_meta (buffer,
-        DATA_CHANNEL_PPID_WEBRTC_STRING, channel->ordered, reliability,
-        rel_param);
+    ppid = DATA_CHANNEL_PPID_WEBRTC_STRING;
   }
+
+  _get_sctp_reliability (channel, &reliability, &rel_param);
+  gst_sctp_buffer_add_send_meta (buffer, ppid, channel->ordered, reliability,
+      rel_param);
 
   GST_TRACE_OBJECT (channel, "Sending string using buffer %" GST_PTR_FORMAT,
       buffer);

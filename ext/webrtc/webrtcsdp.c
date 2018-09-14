@@ -734,3 +734,18 @@ _get_sctp_port_from_media (const GstSDPMedia * media)
     GST_LOG ("no sctp-port attribute in media");
   return sctpmap;
 }
+
+guint64
+_get_sctp_max_message_size_from_media (const GstSDPMedia * media)
+{
+  int i;
+
+  for (i = 0; i < gst_sdp_media_attributes_len (media); i++) {
+    const GstSDPAttribute *attr = gst_sdp_media_get_attribute (media, i);
+
+    if (g_strcmp0 (attr->key, "max-message-size") == 0)
+      return atoi (attr->value);
+  }
+
+  return 65536;
+}
