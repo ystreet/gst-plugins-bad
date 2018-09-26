@@ -555,6 +555,9 @@ struct _GstH265HRDParams
 struct _GstH265VPS {
   guint8 id;
 
+  guint8 base_layer_internal_flag;
+  guint8 base_layer_available_flag;
+
   guint8 max_layers_minus1;
   guint8 max_sub_layers_minus1;
   guint8 temporal_id_nesting_flag;
